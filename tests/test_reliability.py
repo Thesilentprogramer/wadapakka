@@ -46,6 +46,19 @@ def test_handoff_and_brief():
     assert '2500' in brief({'amount_inr': 2500}, 'agent se baat', hit['reason'])
 
 
+def test_handoffs_endpoint_lists_session_reason_and_brief():
+    client = TestClient(app)
+    sid = client.post('/api/session').json()['session']['id']
+    response = client.post('/api/turn-text', json={
+        'session_id': sid, 'transcript': 'mujhe aapke manager se baat karni hai'
+    })
+    assert response.status_code == 200
+    rows = client.get('/api/handoffs').json()['rows']
+    match = next(row for row in rows if row['session_id'] == sid)
+    assert match['reason'] == 'human_requested'
+    assert 'manager' in match['brief']
+
+
 def test_confirmed_write_and_handoff_stop():
     client = TestClient(app)
     sid = client.post('/api/session').json()['session']['id']

@@ -58,8 +58,10 @@ export interface EvalResponse {
   naive_slot_accuracy: number;
   layer_slot_accuracy: number;
   policy?: string;
-  details?: unknown[];
+  details?: Array<{ id: string; note: string; naive_correct: boolean; layer_correct: boolean }>;
 }
+
+export interface HandoffRow { session_id: string; reason: string; brief: string; transcript: string; logged_at: string }
 
 type ComparisonResults = Partial<Record<Pipeline, TurnResponse>>;
 
@@ -91,6 +93,10 @@ function jsonInit(body: unknown): RequestInit {
 export function useTurnCall(active = true) {
   const [results, setResults] = useState<ComparisonResults>({});
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  const [ledgerError, setLedgerError] = useState('');
+  const [handoffs, setHandoffs] = useState<HandoffRow[]>([]);
+  const [handoffError, setHandoffError] = useState('');
+  const [evalError, setEvalError] = useState('');
   const [status, setStatus] = useState('Start a comparison to begin.');
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -137,17 +143,22 @@ export function useTurnCall(active = true) {
 
   const refreshLedger = useCallback(async () => {
     if (!mountedRef.current) return;
-    const ids = Object.values(idsRef.current).filter((id): id is string => Boolean(id));
-    if (!ids.length) {
-      setLedger([]);
-      return;
-    }
     try {
       const data = await requestJson<{ rows: LedgerRow[] }>('/api/ledger');
       if (!mountedRef.current) return;
-      setLedger(data.rows.filter((row) => ids.includes(row.session_id)));
+      setLedger(data.rows);
+      setLedgerError('');
     } catch (error) {
-      if (mountedRef.current) setStatus(error instanceof Error ? error.message : 'Could not load the promise ledger.');
+      if (mountedRef.current) setLedgerError(error instanceof Error ? error.message : 'Could not load the promise ledger.');
+    }
+  }, []);
+
+  const refreshHandoffs = useCallback(async () => {
+    try {
+      const data = await requestJson<{ rows: HandoffRow[] }>('/api/handoffs');
+      if (mountedRef.current) { setHandoffs(data.rows); setHandoffError(''); }
+    } catch (error) {
+      if (mountedRef.current) setHandoffError(error instanceof Error ? error.message : 'Could not load handoffs.');
     }
   }, []);
 
@@ -232,7 +243,6 @@ export function useTurnCall(active = true) {
     setBusy(true);
     setStatus('Starting paired sessions…');
     setComparisonResults({});
-    setLedger([]);
     setEvalResult(null);
     try {
       const [naive, layer] = await Promise.all([
@@ -273,6 +283,7 @@ export function useTurnCall(active = true) {
       if (!mountedRef.current) return;
       setStatus(modeLabel.startsWith('Transcribing') ? 'Audio turn processed.' : 'Turn processed.');
       await refreshLedger();
+      await refreshHandoffs();
       const layerResult = responses.find(({ pipeline }) => pipeline === 'layer')?.response;
       if (layerResult?.prompt) await speak(layerResult.prompt);
     } catch (error) {
@@ -280,7 +291,7 @@ export function useTurnCall(active = true) {
     } finally {
       if (mountedRef.current) setBusy(false);
     }
-  }, [applyResponse, refreshLedger, speak]);
+  }, [applyResponse, refreshLedger, refreshHandoffs, speak]);
 
   const submitText = useCallback(async (transcript: string) => {
     if (!transcript.trim() || !idsRef.current.layer || !mountedRef.current || !activeRef.current) return;
@@ -364,6 +375,7 @@ export function useTurnCall(active = true) {
   const runEval = useCallback(async () => {
     if (!mountedRef.current || !activeRef.current) return;
     setEvalBusy(true);
+    setEvalError('');
     setStatus('Running the supplied text fixtures…');
     try {
       const result = await requestJson<EvalResponse>('/api/eval');
@@ -371,7 +383,7 @@ export function useTurnCall(active = true) {
       setEvalResult(result);
       setStatus('Fixture evaluation complete.');
     } catch (error) {
-      if (mountedRef.current) setStatus(`Evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (mountedRef.current) setEvalError(error instanceof Error ? error.message : 'Unknown error');
     } finally {
       if (mountedRef.current) setEvalBusy(false);
     }
@@ -383,6 +395,8 @@ export function useTurnCall(active = true) {
 
   useEffect(() => {
     mountedRef.current = true;
+    void refreshLedger();
+    void refreshHandoffs();
     return () => {
       mountedRef.current = false;
       cancelRecording();
@@ -396,7 +410,7 @@ export function useTurnCall(active = true) {
       audioRef.current?.pause();
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     };
-  }, [cancelRecording]);
+  }, [cancelRecording, refreshLedger, refreshHandoffs]);
 
   useEffect(() => {
     activeRef.current = active;
@@ -409,11 +423,17 @@ export function useTurnCall(active = true) {
   return {
     results,
     ledger,
+    ledgerError,
+    refreshLedger,
+    handoffs,
+    handoffError,
+    refreshHandoffs,
     status,
     busy,
     recording,
     evalBusy,
     evalResult,
+    evalError,
     playbackState,
     playbackTime,
     playbackDuration,

@@ -411,6 +411,16 @@ def get_ledger() -> dict[str, Any]:
     return {"rows": ledger.rows}
 
 
+@app.get("/api/handoffs")
+def get_handoffs() -> dict[str, Any]:
+    return {"rows": [
+        {"session_id": event["session_id"], "reason": event["handoff"]["reason"],
+         "brief": event["brief"], "transcript": event["transcript"],
+         "logged_at": event["logged_at"]}
+        for event in turn_log.events if event.get("decision") == "handoff"
+    ]}
+
+
 @app.get("/api/eval")
 def run_eval() -> dict[str, Any]:
     import json

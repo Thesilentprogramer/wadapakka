@@ -385,11 +385,17 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
   const {
     results,
     ledger,
+    ledgerError,
+    refreshLedger,
+    handoffs,
+    handoffError,
+    refreshHandoffs,
     status,
     busy,
     recording,
     evalBusy,
     evalResult,
+    evalError,
     playbackState,
     playbackTime,
     playbackDuration,
@@ -518,20 +524,16 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
               <h2 className="section-title" id="promise-ledger-title">Promise ledger</h2>
               <p className="mt-1 text-sm text-[var(--muted)]">Idempotent writes from these two sessions</p>
             </div>
-            <span className="pill inline-flex items-center gap-2"><FileCheck2 size={13} aria-hidden="true" />{ledger.length} {ledger.length === 1 ? 'write' : 'writes'}</span>
+            <div className="flex items-center gap-2"><span className="pill inline-flex items-center gap-2"><FileCheck2 size={13} aria-hidden="true" />{ledger.length} {ledger.length === 1 ? 'write' : 'writes'}</span><Button type="button" variant="secondary" onClick={() => void refreshLedger()}>Refresh</Button></div>
           </div>
+          {ledgerError && <p role="alert" className="text-sm text-[var(--red)]">Ledger unavailable: {ledgerError}</p>}
           <PromiseLedger rows={ledger} results={results} />
           <div id="handoff-desk" className="handoff-desk" aria-label="Handoff desk">
-            <h3 className="text-sm font-semibold text-[var(--ink)]">Handoff desk</h3>
-            {!results.layer?.handoff_brief && <p className="mt-1 text-sm text-[var(--muted)]">A handoff brief will appear here when the reliability layer flags a call for review.</p>}
-          <AnimatePresence>
-            {results.layer?.handoff_brief && (
-              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-4 rounded-xl border border-[#f5d99c] bg-[#fff7e9] p-4">
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--amber)]"><UserRound size={15} aria-hidden="true" />Handoff brief</h3>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-[var(--ink)]">{results.layer.handoff_brief}</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
+            <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-semibold text-[var(--ink)]">Handoff desk</h3><Button type="button" variant="secondary" onClick={() => void refreshHandoffs()}>Refresh</Button></div>
+            <button type="button" className="sample-line mt-2" onClick={() => { setTranscript('mujhe aapke manager se baat karni hai'); document.getElementById('borrower-turn')?.focus() }}>Trigger sample handoff: “mujhe aapke manager se baat karni hai” <ArrowRight size={14} aria-hidden="true" /></button>
+            {handoffError && <p role="alert" className="mt-2 text-sm text-[var(--red)]">Handoffs unavailable: {handoffError}</p>}
+            {!handoffs.length && <p className="mt-2 text-sm text-[var(--muted)]">No handoffs yet. Start a comparison, then send the sample line.</p>}
+            {handoffs.slice().reverse().map(row => <article key={`${row.session_id}-${row.logged_at}`} className="mt-3 rounded-xl bg-[#fff7e9] p-4"><h4 className="flex items-center gap-2 text-sm font-semibold text-[var(--amber)]"><UserRound size={15} aria-hidden="true" />{row.reason.replaceAll('_', ' ')}</h4><p className="mt-2 break-words whitespace-pre-wrap text-sm leading-relaxed text-[var(--ink)]">{row.brief}</p><p className="mt-2 text-xs text-[var(--muted)]">Session {row.session_id.slice(0, 8)}</p></article>)}
           </div>
         </section>
       </div>
@@ -547,6 +549,7 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
             {evalBusy ? 'Evaluating…' : 'Run text eval'}
           </Button>
         </div>
+        {evalError && <p role="alert" className="mt-3 text-sm text-[var(--red)]">Evaluation failed: {evalError}</p>}
         {evalResult && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-4 grid gap-3 border-t border-[color:var(--line)] pt-4 sm:grid-cols-2">
             <div className="rounded-xl bg-[#f1f5fc] p-4">
@@ -558,6 +561,7 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
               <p className="mt-1 text-xl font-semibold text-[var(--primary)]">{evalResult.layer_correct}/{evalResult.n} <span className="text-sm font-medium text-[var(--muted)]">({Math.round(evalResult.layer_slot_accuracy * 100)}%)</span></p>
             </div>
             <p className="text-xs leading-relaxed text-[var(--muted)] sm:col-span-2">These results compare different supplied transcripts, so they describe the fixture scenarios rather than measured model uplift.</p>
+            <div className="overflow-x-auto sm:col-span-2"><table className="w-full min-w-[450px] text-left text-sm"><caption className="sr-only">Evaluation results by case</caption><thead><tr><th className="py-2">Case</th><th>Naive</th><th>Layer</th></tr></thead><tbody>{evalResult.details?.map(row => <tr key={row.id} className="border-t border-[color:var(--line)]"><td className="py-2">{row.id}: {row.note}</td><td>{row.naive_correct ? 'Pass' : 'Fail'}</td><td>{row.layer_correct ? 'Pass' : 'Fail'}</td></tr>)}</tbody></table></div>
           </motion.div>
         )}
       </section>
