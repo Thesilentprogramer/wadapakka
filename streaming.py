@@ -7,6 +7,7 @@ import json
 import os
 import ssl
 import time
+import re
 from contextlib import suppress
 
 import certifi
@@ -15,6 +16,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from gnani_tts import DEFAULT_LANGUAGE, DEFAULT_MODEL, DEFAULT_VOICE, synthesize
 from handoff import detect_handoff
+from normalizer import parse_amount_inr, parse_relative_date, parse_mode
 from state_machine import State
 
 TLS = ssl.create_default_context(cafile=certifi.where())
@@ -61,6 +63,24 @@ class ReadbackGate:
         return self.awaiting and self.played and not self.interrupted
 
 
+def accept_final(text: str, confirmed_speech: bool, during_playback: bool,
+                 readback_complete: bool, interrupted: bool) -> bool:
+    """Reject echo/filler finals before they can mutate a session."""
+    clean = re.sub(r"[^\w\u0900-\u097f]+", "", text.lower())
+    if not clean or len(clean) < 3:
+        return False
+    has_content = (parse_amount_inr(text)[0] is not None or
+                   parse_relative_date(text)[0] is not None or
+                   parse_mode(text)[0] is not None or
+                   detect_handoff(text)["handoff"])
+    filler = clean in {"haan", "han", "हाँ", "हां", "yes", "ok", "okay", "जी", "ji", "अच्छी", "achha", "अच्छा"}
+    if filler and (during_playback or not (readback_complete or interrupted)):
+        return False
+    if during_playback and not has_content:
+        return False
+    return confirmed_speech or has_content
+
+
 async def live_socket(ws: WebSocket, session_id: str) -> None:
     from app import _handle_turn, sessions, text_is_confirmation
 
@@ -84,6 +104,8 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
     first_audio: float | None = None
     seen_segments: set[str] = set()
     active_turn: int | None = None
+    confirmed_speech = False
+    local_speech_at: float | None = None
 
     async def send(message: dict) -> None:
         async with lock:
@@ -105,8 +127,9 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
         # A half-heard read back can never authorize a confirmation.
         if gate.awaiting and session["state"] == State.CONFIRMING.value:
             session["state"] = State.CLARIFY.value
+        origin = speech_start if source == "prisma_speech_start" else local_speech_at
         await send({"type": "interrupted", "turn_id": interrupted, "source": source,
-                    "reaction_ms": round((time.perf_counter() - speech_start) * 1000) if source == "prisma_speech_start" and speech_start else None,
+                    "reaction_ms": round((time.perf_counter() - origin) * 1000) if origin else None,
                     "session": session})
 
     async def speak(prompt: str, turn_id: int) -> None:
@@ -165,7 +188,7 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
     try:
         async with websockets.connect(STT_URL, additional_headers=headers, ssl=TLS, open_timeout=10) as stt:
             async def browser_to_stt() -> None:
-                nonlocal speech_end, active_turn, tts_task
+                nonlocal speech_end, active_turn, tts_task, confirmed_speech, local_speech_at
                 while True:
                     incoming = await ws.receive()
                     if incoming["type"] == "websocket.disconnect":
@@ -185,7 +208,10 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                     except json.JSONDecodeError:
                         continue
                     if control.get("type") == "barge_in":
-                        await cancel("local_vad")
+                        if control.get("source") == "local_sustained" and control.get("sustained_ms", 0) >= 300:
+                            local_speech_at = time.perf_counter()
+                            confirmed_speech = True
+                            await cancel("local_sustained")
                     elif control.get("type") == "speech_end":
                         speech_end = time.perf_counter()
                     elif control.get("type") == "playback_done":
@@ -197,7 +223,7 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                         return
 
             async def stt_to_browser() -> None:
-                nonlocal speech_start, speech_end, first_audio, tts_task, active_turn
+                nonlocal speech_start, speech_end, first_audio, tts_task, active_turn, confirmed_speech
                 async for raw in stt:
                     event = json.loads(raw)
                     kind = event.get("type")
@@ -208,6 +234,7 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                         tts_task = asyncio.create_task(speak("Namaste, main WadaPakka bol rahi hoon. Aap kab, kitna, aur kaise bharenge?", active_turn))
                     elif kind == "speech_start":
                         speech_start = time.perf_counter()
+                        confirmed_speech = True
                         speech_end = None
                         await cancel("prisma_speech_start")
                         await send({"type": "speech_start", "utterance_id": event.get("utterance_id")})
@@ -221,13 +248,18 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                         if segment:
                             seen_segments.add(segment)
                         text = (event.get("text") or "").strip()
+                        during_playback = active_turn is not None
+                        allowed = accept_final(text, confirmed_speech, during_playback,
+                                               gate.can_confirm(), gate.interrupted)
                         metrics = {"end_to_final_ms": round((time.perf_counter() - speech_end) * 1000) if speech_end else None,
                                    "prisma_latency_ms": event.get("latency")}
                         await send({"type": "transcript", "text": text, "segment_id": segment,
                                     "utterance_id": event.get("utterance_id"), "latency": event.get("latency"),
-                                    "is_final": event.get("is_final", True), "metrics": metrics})
-                        if not text or session["state"] in {"HANDOFF", "REFUSED", "WRITTEN"}:
+                                    "is_final": event.get("is_final", True), "metrics": metrics,
+                                    "ignored": not allowed})
+                        if not event.get("is_final", True) or not allowed or session["state"] in {"HANDOFF", "REFUSED", "WRITTEN"}:
                             continue
+                        confirmed_speech = False
                         if text_is_confirmation(text) and session["state"] == "CLARIFY" and gate.awaiting and gate.interrupted:
                             reply = {"session": session, "transcript": text, "prompt": "Pehle poora read back suniye. Maine note kiya: " + ", ".join(str(session["slots"].get(k)) for k in ("amount_inr", "pay_date", "mode")) + ". Kya yeh sahi hai?",
                                      "event": {"decision": "readback_repeated"}}

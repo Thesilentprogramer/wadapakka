@@ -1,0 +1,19 @@
+# Fix false barge-in + UI revamp (deadline tonight 11:59 PM IST; finish in ~2.5 hours, barge-in fix FIRST)
+
+## Part A: false barge-in (critical)
+A real mic test showed every agent TTS turn gets "INTERRUPTED" within ~0-1s by `local_vad` (local energy VAD), with "— ms from Prisma speech_start", i.e. Prisma never confirmed speech. Speaker echo / background audio (a video playing: "So, ready for the good news?") triggers it, so the agent never finishes a prompt and stray STT finals like "हाँ।", "अच्छी।", "मसाले भी डालिए।" get treated as caller turns. Here is the user's timeline (newest first):
+- Turn 1 greeting interrupted at 14:12:07, the same second the call started
+- Each turn: Layer "need more slots" -> Agent prompt -> First TTS byte ~0.7-2s -> local_vad interrupt -> server cancelled TTS
+Fix:
+1. Local VAD must not cancel on its own. Only "duck" (lower volume to ~30%) on local energy; actually stop + cancel TTS only when (a) Prisma `speech_start` arrives, or (b) local speech is sustained >= 300 ms above an adaptive threshold.
+2. Adaptive threshold: calibrate the noise floor in the first ~500 ms of the call, and while the agent is speaking, raise the threshold (e.g. noise floor + margin, plus an estimate of playback leakage measured from the agent's own output level). Add a 400 ms grace window at the start of each agent utterance where barge-in is ignored unless Prisma confirms.
+3. Ignore junk finals: drop STT finals that are empty or very short filler, or that arrive while no caller speech was confirmed, and especially ones that overlap agent playback, unless they contain slot or handoff content. A bare "haan" only counts as a confirmation when a read-back is pending AND it was spoken after the read-back finished or after a confirmed barge-in.
+4. Add a "Headphones mode" toggle (default on) plus a visible hint "Use headphones for live mode". Show barge-in source and reaction time correctly (fix the "— ms" display when Prisma confirms later).
+5. Add tests with a fake event stream: echo-only energy never cancels TTS; Prisma speech_start does; sustained local speech does; a filler final during playback isn't treated as a caller turn.
+6. Re-run scripts/stream_smoke.py and also write a scripted barge-in test that plays agent TTS while streaming a caller WAV that starts speaking mid-sentence; report the reaction time.
+
+## Part B: UI revamp
+Make the UI look premium on a screen recording using components and styles from 21st.dev (https://21st.dev), BoardUI (https://www.boardui.com/components) and opensourceui.in (https://opensourceui.in/). Fetch their component pages and use or adapt real components where you can. If the app is plain HTML/JS, either port it to a small Vite + React + Tailwind (+ shadcn-style) frontend served by FastAPI from the build output, or adapt the components' Tailwind/CSS into the current static UI, whichever is safer in the time. Keep every existing feature and API contract working.
+Layout: a hero header (WadaPakka, "Reliability layer for Gnani voice agents", model badges Prisma v3.0 / Timbre v2.5); a live call panel with a big mic orb, waveform/level meter and a call status pill; slot cards (amount/date/mode) animating pending -> reading back -> confirmed; a naive vs layer split view; the PTP ledger table; a handoff brief card; a collapsible observability timeline (newest first, colour-coded event types); and a stats bar (STT latency, first-audio latency, barge-in reaction). Dark theme, smooth animations, readable at 1080p.
+
+Notes: no Inya/Agent Builder. Test on port 8001 (8000 is the running server). Don't git commit (.git is read-only for you). Never print the .env key. Run `.venv/bin/pytest` at the end; all tests must pass. Print a short summary: what changed, test results, measured barge-in numbers, and anything unverified.
