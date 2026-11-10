@@ -102,8 +102,8 @@ function ReadbackPlayer({ text, state, currentTime, duration, onToggle, onSeek }
   onSeek: (time: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-[color:var(--line)] bg-black/15 p-3 sm:gap-4 sm:p-4">
-      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[rgba(140,226,194,.1)] text-[var(--mint)]">
+    <div className="flex items-center gap-3 rounded-xl border border-[color:var(--line)] bg-[#f1f5fc] p-3 sm:gap-4 sm:p-4">
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e5f0ff] text-[var(--primary)]">
         <AudioLines size={18} aria-hidden="true" />
       </span>
       <div className="min-w-0 flex-1">
@@ -133,7 +133,7 @@ function ReadbackPlayer({ text, state, currentTime, duration, onToggle, onSeek }
             value={Math.min(currentTime, duration || 0)}
             onChange={(event) => onSeek(Number(event.target.value))}
             disabled={!duration}
-            className="h-1.5 min-w-0 flex-1 cursor-pointer accent-[var(--mint)] disabled:cursor-default"
+            className="h-1.5 min-w-0 flex-1 cursor-pointer accent-[var(--primary)] disabled:cursor-default"
             aria-label="Seek through agent read back"
           />
           <time>{duration ? formatTime(duration) : '0:00'}</time>
@@ -167,7 +167,7 @@ function SlotCards({ response, pipeline }: { response?: TurnResponse; pipeline: 
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -4 }}
                   transition={{ duration: 0.16 }}
-                  className={`shrink-0 text-[10px] font-bold uppercase tracking-wide ${state.kind === 'confirmed' ? 'text-[var(--mint)]' : state.kind === 'review' ? 'text-[var(--amber)]' : 'text-[var(--muted)]'}`}
+                  className={`shrink-0 text-[10px] font-bold uppercase tracking-wide ${state.kind === 'confirmed' ? 'text-[var(--green)]' : state.kind === 'review' ? 'text-[var(--amber)]' : 'text-[var(--muted)]'}`}
                 >
                   {state.label}
                 </motion.span>
@@ -214,7 +214,7 @@ function PipelinePanel({ response, pipeline, onToggleReadback, onSeekReadback, p
     <>
       <header className="flex items-start justify-between gap-3 border-b border-[color:var(--line)] px-5 py-5 sm:px-6">
         <div className="flex min-w-0 items-start gap-3">
-          <span className={`mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl ${isLayer ? 'bg-[rgba(140,226,194,.12)] text-[var(--mint)]' : 'bg-white/[0.06] text-[var(--muted)]'}`}>
+          <span className={`mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl ${isLayer ? 'bg-[#e5f0ff] text-[var(--primary)]' : 'bg-[#edf1f7] text-[var(--muted)]'}`}>
             {isLayer ? <ShieldCheck size={18} aria-hidden="true" /> : <AudioLines size={18} aria-hidden="true" />}
           </span>
           <div className="min-w-0">
@@ -285,7 +285,7 @@ function PipelinePanel({ response, pipeline, onToggleReadback, onSeekReadback, p
                   initial={{ opacity: 0, height: 0, y: 8 }}
                   animate={{ opacity: 1, height: 'auto', y: 0 }}
                   exit={{ opacity: 0, height: 0, y: -8 }}
-                  className="mt-3 overflow-hidden rounded-xl border border-[rgba(241,197,122,.35)] bg-[rgba(241,197,122,.08)] p-4 text-sm leading-relaxed text-[var(--amber)]"
+                  className="mt-3 overflow-hidden rounded-xl border border-[#f5d99c] bg-[#fff7e9] p-4 text-sm leading-relaxed text-[var(--amber)]"
                 >
                   <span className="mb-1 flex items-center gap-2 font-semibold"><UserRound size={15} aria-hidden="true" /> Human handoff brief</span>
                   {handoff}
@@ -332,7 +332,7 @@ function TurnTimeline({ results }: { results: Partial<Record<Pipeline, TurnRespo
         ].filter(Boolean).join(' / ');
         return (
           <li key={key} className="grid grid-cols-[62px_minmax(0,1fr)] gap-3 py-3">
-            <span className="pt-0.5 text-xs font-medium text-[var(--mint)]">Turn {index + 1}</span>
+            <span className="pt-0.5 text-xs font-medium text-[var(--primary)]">Turn {index + 1}</span>
             <div className="min-w-0">
               <strong className="block text-sm font-semibold text-[var(--ink)]">{pipeline === 'naive' ? 'Naive' : 'Layer'} · {readable(event.decision)}</strong>
               <span className="mt-1 block break-words text-xs leading-relaxed text-[var(--muted)]">
@@ -365,7 +365,7 @@ function PromiseLedger({ rows, results }: { rows: ReturnType<typeof useTurnCall>
             <tr><td colSpan={5} className="px-2 py-5 text-sm text-[var(--muted)]">No promises recorded yet.</td></tr>
           ) : rows.map((row) => (
             <tr key={row.commit_key} className="border-b border-[color:var(--line)] last:border-0">
-              <td className="px-2 py-3 font-medium text-[var(--mint)]">{row.session_id === naiveId ? 'Naive' : 'Layer'}</td>
+              <td className="px-2 py-3 font-medium text-[var(--primary)]">{row.session_id === naiveId ? 'Naive' : 'Layer'}</td>
               <td className="px-2 py-3">₹{row.amount_inr.toLocaleString('en-IN')}</td>
               <td className="px-2 py-3">{row.pay_date}</td>
               <td className="px-2 py-3">{row.mode}</td>
@@ -452,7 +452,7 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
             onKeyDown={handleKeyDown}
             placeholder="Or type: main parso dhai hazaar UPI se de dunga"
             rows={1}
-            className="min-h-11 min-w-0 flex-1 resize-y rounded-xl border border-[color:var(--line)] bg-black/15 px-4 py-3 text-sm text-[var(--ink)] placeholder:text-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--mint)]"
+            className="min-h-11 min-w-0 flex-1 resize-y rounded-xl border border-[color:var(--line)] bg-[#f7f9fe] px-4 py-3 text-sm text-[var(--ink)] placeholder:text-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary)]"
             disabled={!canTurn || busy}
           />
 
@@ -463,10 +463,10 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <p className="flex min-w-0 items-center gap-2 text-sm text-[var(--muted)]" role="status" aria-live="polite">
-            <span className={`h-2 w-2 rounded-full ${busy ? 'animate-pulse bg-[var(--amber)]' : started ? 'bg-[var(--mint)]' : 'bg-[var(--muted)]'}`} aria-hidden="true" />
+            <span className={`h-2 w-2 rounded-full ${busy ? 'animate-pulse bg-[var(--amber)]' : started ? 'bg-[var(--primary)]' : 'bg-[var(--muted)]'}`} aria-hidden="true" />
             <span>{status}</span>
           </p>
-          <span className="pill inline-flex items-center gap-2 text-xs"><span className={`h-1.5 w-1.5 rounded-full ${busy ? 'bg-[var(--amber)]' : started ? 'bg-[var(--mint)]' : 'bg-[var(--muted)]'}`} />{stateLabel}</span>
+          <span className="pill inline-flex items-center gap-2 text-xs"><span className={`h-1.5 w-1.5 rounded-full ${busy ? 'bg-[var(--amber)]' : started ? 'bg-[var(--primary)]' : 'bg-[var(--muted)]'}`} />{stateLabel}</span>
         </div>
       </form>
 
@@ -520,7 +520,7 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
           <PromiseLedger rows={ledger} results={results} />
           <AnimatePresence>
             {results.layer?.handoff_brief && (
-              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-4 rounded-xl border border-[rgba(241,197,122,.35)] bg-[rgba(241,197,122,.08)] p-4">
+              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-4 rounded-xl border border-[#f5d99c] bg-[#fff7e9] p-4">
                 <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--amber)]"><UserRound size={15} aria-hidden="true" />Handoff brief</h3>
                 <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-[var(--ink)]">{results.layer.handoff_brief}</p>
               </motion.div>
@@ -542,13 +542,13 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
         </div>
         {evalResult && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-4 grid gap-3 border-t border-[color:var(--line)] pt-4 sm:grid-cols-2">
-            <div className="rounded-xl bg-black/15 p-4">
+            <div className="rounded-xl bg-[#f1f5fc] p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Naive slot accuracy</p>
               <p className="mt-1 text-xl font-semibold text-[var(--ink)]">{evalResult.naive_correct}/{evalResult.n} <span className="text-sm font-medium text-[var(--muted)]">({Math.round(evalResult.naive_slot_accuracy * 100)}%)</span></p>
             </div>
-            <div className="rounded-xl bg-black/15 p-4">
+            <div className="rounded-xl bg-[#f1f5fc] p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Layer slot accuracy</p>
-              <p className="mt-1 text-xl font-semibold text-[var(--mint)]">{evalResult.layer_correct}/{evalResult.n} <span className="text-sm font-medium text-[var(--muted)]">({Math.round(evalResult.layer_slot_accuracy * 100)}%)</span></p>
+              <p className="mt-1 text-xl font-semibold text-[var(--primary)]">{evalResult.layer_correct}/{evalResult.n} <span className="text-sm font-medium text-[var(--muted)]">({Math.round(evalResult.layer_slot_accuracy * 100)}%)</span></p>
             </div>
             <p className="text-xs leading-relaxed text-[var(--muted)] sm:col-span-2">These results compare different supplied transcripts, so they describe the fixture scenarios rather than measured model uplift.</p>
           </motion.div>

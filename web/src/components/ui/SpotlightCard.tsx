@@ -4,5 +4,5 @@ import { cn } from '../../lib/utils'
 export function SpotlightCard({className,style,onMouseMove,...props}:HTMLAttributes<HTMLElement>) {
   const [point,setPoint]=useState({x:50,y:50})
   function move(event:MouseEvent<HTMLElement>){const r=event.currentTarget.getBoundingClientRect();setPoint({x:(event.clientX-r.left)/r.width*100,y:(event.clientY-r.top)/r.height*100});onMouseMove?.(event)}
-  return <article className={cn('spotlight-card',className)} style={{...style,backgroundImage:`radial-gradient(340px circle at ${point.x}% ${point.y}%, rgba(127,230,188,.12), transparent 75%)`}} onMouseMove={move} {...props}/>
+  return <article className={cn('spotlight-card',className)} style={{...style,backgroundImage:`radial-gradient(340px circle at ${point.x}% ${point.y}%, rgba(61,139,255,.14), transparent 75%)`}} onMouseMove={move} {...props}/>
 }
