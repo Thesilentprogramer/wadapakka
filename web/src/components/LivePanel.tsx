@@ -33,7 +33,7 @@ function displaySlot(key: string, value: unknown) {
 
 function decisionLabel(result?: PipelineResult) {
   const decision = result?.event?.decision;
-  return decision ? decision.replaceAll('_', ' ') : 'Waiting for speech';
+  return decision ? decision.replaceAll('_', ' ') : 'Ready for a live call';
 }
 
 function ComparisonCard({ kind, result }: { kind: PipelineKind; result?: PipelineResult }) {
@@ -49,7 +49,7 @@ function ComparisonCard({ kind, result }: { kind: PipelineKind; result?: Pipelin
         </div>
         <span className="pill !px-2 !py-1 !text-[9px]">{state ? state.replaceAll('_', ' ') : 'Ready'}</span>
       </div>
-      <p className="mt-3 min-h-10 break-words text-sm leading-relaxed text-[var(--muted)]">{result?.transcript || 'No finalized transcript yet.'}</p>
+      <p className="mt-3 min-h-10 break-words text-sm leading-relaxed text-[var(--muted)]">{result?.transcript || 'Start a live call to see the transcript.'}</p>
       <div className="mt-2 grid grid-cols-3 gap-2">
         {slots.map(({ key, label }) => (
           <div key={key} className="min-w-0 rounded-lg bg-[#eef4fd] p-2">
@@ -301,7 +301,7 @@ export default function LivePanel({ active = true, onPipelineUpdate }: LivePanel
                     <td>{row.mode}</td>
                     <td className="font-mono text-[10px]">{row.commit_key.slice(0, 8)}</td>
                   </tr>
-                )) : <tr><td colSpan={5} className="muted">No live promises recorded.</td></tr>}
+                )) : <tr><td colSpan={5} className="muted">Confirmed live promises appear here.</td></tr>}
               </tbody>
             </table>
           </div>

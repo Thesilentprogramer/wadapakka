@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AudioLines,
+  ArrowRight,
   Check,
   CircleStop,
   Clock3,
@@ -239,7 +240,7 @@ function PipelinePanel({ response, pipeline, onToggleReadback, onSeekReadback, p
               transition={{ duration: 0.18 }}
               className={`min-h-[3.5rem] text-lg font-medium leading-relaxed ${transcript ? 'text-[var(--ink)]' : 'text-[var(--muted)]'}`}
             >
-              {transcript || 'Waiting for a turn…'}
+              {transcript || 'Start comparison, then speak or type a borrower line'}
             </motion.p>
           </AnimatePresence>
         </section>
@@ -363,7 +364,7 @@ function PromiseLedger({ rows, results }: { rows: ReturnType<typeof useTurnCall>
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <tr><td colSpan={5} className="px-2 py-5 text-sm text-[var(--muted)]">No promises recorded yet.</td></tr>
+            <tr><td colSpan={5} className="px-2 py-5 text-sm text-[var(--muted)]">Confirmed promises appear here after a call.</td></tr>
           ) : rows.map((row) => (
             <tr key={row.commit_key} className="border-b border-[color:var(--line)] last:border-0">
               <td className="px-2 py-3 font-medium text-[var(--primary)]">{row.session_id === naiveId ? 'Naive' : 'Layer'}</td>
@@ -451,7 +452,7 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
             value={transcript}
             onChange={(event) => setTranscript(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Or type: main parso dhai hazaar UPI se de dunga"
+            placeholder="Type a borrower promise in Hinglish"
             rows={1}
             className="min-h-11 min-w-0 flex-1 resize-y rounded-xl border border-[color:var(--line)] bg-[#f7f9fe] px-4 py-3 text-sm text-[var(--ink)] placeholder:text-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary)]"
             disabled={!canTurn || busy}
@@ -463,6 +464,7 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
           </Button>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <button type="button" className="sample-line" disabled={busy} onClick={() => { setTranscript('main parso dhai hazaar rupaye UPI se de dunga'); document.getElementById('borrower-turn')?.focus() }}>Use sample: “parso dhai hazaar” <ArrowRight size={14} aria-hidden="true" /></button>
           <p className="flex min-w-0 items-center gap-2 text-sm text-[var(--muted)]" role="status" aria-live="polite">
             <span className={`h-2 w-2 rounded-full ${busy ? 'animate-pulse bg-[var(--amber)]' : started ? 'bg-[var(--primary)]' : 'bg-[var(--muted)]'}`} aria-hidden="true" />
             <span>{status}</span>

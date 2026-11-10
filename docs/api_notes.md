@@ -1,5 +1,9 @@
 # Live Gnani API observations
 
+## Scripted streaming observations used on the landing page
+
+The 10 November 2026 port-8001 smoke checks in the project README used one clean, generated `dhai_hazaar.wav` clip. Three runs reported 707, 714, and 755 ms from speech end to final STT, and 1,142, 1,049, and 1,269 ms to first TTS audio byte. A separate stream smoke check reported 698 ms and 1,011 ms respectively. One injected-audio barge-in check observed 266 ms from caller WAV onset to Prisma cancellation. These are scripted observations, not a real microphone latency distribution or barge-in benchmark.
+
 Verified 10 November 2026 with the local `.env` key. No key, request identifier or full response body is stored here. The clients send `X-API-Key-ID` only to `https://api.vachana.ai`.
 
 | Call | Request | Observed response |
