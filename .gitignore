@@ -1,9 +1,8 @@
 .env
+*.log
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
-server.log
-codex_*.log
-
 web/node_modules/
 web/*.tsbuildinfo
