@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WadaPakka — reliability layer</title>
+  <style>
+    :root { font-family: "IBM Plex Sans", "Segoe UI", sans-serif; color: #102a2a; background: #f4f1ea; }
+    body { max-width: 920px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 1.4rem; margin-bottom: 0.2rem; }
+    .sub { color: #4a5d5d; margin-bottom: 1.2rem; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 16px; }
+    button, select { border: 0; background: #0b3d3d; color: #fff; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
+    button.secondary { background: #6b4f2a; }
+    button.warn { background: #8a2b2b; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .card { background: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+    label { align-self: center; }
+    .ok { color: #0b6b3a; font-weight: 650; }
+    .bad { color: #8a2b2b; font-weight: 650; }
+  </style>
+</head>
+<body>
+  <h1>WadaPakka</h1>
+  <p class="sub">Reliability layer on Prisma STT + Timbre TTS. Synthetic collections closer — no real borrower data.</p>
+
+  <div class="card">
+    <div class="row">
+      <button id="newSession" type="button">New session</button>
+      <label>Mode
+        <select id="mode">
+          <option value="layer">Layer (confirm before write)</option>
+          <option value="naive">Naive (write first guess)</option>
+        </select>
+      </label>
+      <button id="record" type="button" disabled>Hold to talk — click to start/stop</button>
+      <button id="confirmYes" class="secondary" type="button" disabled>Haan, sahi hai</button>
+      <button id="confirmNo" class="warn" type="button" disabled>Nahi, galat hai</button>
+      <button id="evalBtn" class="secondary" type="button">Run slot-accuracy eval</button>
+    </div>
+    <p>Or type a turn (works without an API key):</p>
+    <div class="row">
+      <input id="typed" style="flex:1;min-width:240px;padding:8px" placeholder="dhai hazaar rupaye parso UPI se" />
+      <button id="sendText" type="button" disabled>Send text</button>
+    </div>
+    <p id="status">Start a session to begin.</p>
+  </div>
+
+  <div class="card">
+    <h2>Agent prompt</h2>
+    <p id="prompt"></p>
+    <h2>Last transcript</h2>
+    <p id="transcript"></p>
+    <h2>Session</h2>
+    <pre id="sessionView">{}</pre>
+  </div>
+
+  <div class="card">
+    <h2>Eval</h2>
+    <pre id="evalView">Not run yet.</pre>
+  </div>
+
+  <script>
+    let sessionId = null;
+    let mediaRecorder = null;
+    let chunks = [];
+    let recording = false;
+
+    const $ = (id) => document.getElementById(id);
+
+    async function playPrompt(text) {
+      $("prompt").textContent = text || "";
+      if (!text) return;
+      try {
+        const res = await fetch("/api/tts?text=" + encodeURIComponent(text));
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        await audio.play();
+      } catch (err) {
+        console.warn("TTS playback skipped", err);
+      }
+    }
+
+    function renderSession(data) {
+      const session = data.session || data;
+      sessionId = session.id;
+      $("sessionView").textContent = JSON.stringify(session, null, 2);
+      $("transcript").textContent = data.transcript || "";
+      const closed = ["WRITTEN", "HANDOFF", "REFUSED"].includes(session.state);
+      $("confirmYes").disabled = session.state !== "CONFIRMING";
+      $("confirmNo").disabled = session.state !== "CONFIRMING";
+      $("record").disabled = !sessionId || closed;
+      $("sendText").disabled = !sessionId || closed;
+    }
+
+    $("newSession").onclick = async () => {
+      const res = await fetch("/api/session", { method: "POST" });
+      const data = await res.json();
+      renderSession(data);
+      $("status").textContent = "Session " + data.session.id;
+      await playPrompt(data.prompt);
+    };
+
+    $("sendText").onclick = async () => {
+      const transcript = $("typed").value.trim();
+      if (!transcript || !sessionId) return;
+      const res = await fetch("/api/turn-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, transcript, mode: $("mode").value }),
+      });
+      const data = await res.json();
+      renderSession(data);
+      await playPrompt(data.prompt);
+    };
+
+    $("confirmYes").onclick = async () => {
+      const res = await fetch("/api/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, accepted: true }),
+      });
+      renderSession(await res.json());
+    };
+    $("confirmNo").onclick = async () => {
+      const res = await fetch("/api/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, accepted: false }),
+      });
+      renderSession(await res.json());
+    };
+
+    $("record").onclick = async () => {
+      if (!recording) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        chunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach((t) => t.stop());
+          const blob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
+          const fd = new FormData();
+          fd.append("session_id", sessionId);
+          fd.append("mode", $("mode").value);
+          fd.append("dual_pass_flag", "false");
+          fd.append("audio", blob, "turn.webm");
+          $("status").textContent = "Transcribing…";
+          const res = await fetch("/api/turn", { method: "POST", body: fd });
+          const data = await res.json();
+          if (!res.ok) {
+            $("status").textContent = "STT error: " + JSON.stringify(data);
+            return;
+          }
+          $("status").textContent = "Turn ok";
+          renderSession(data);
+          await playPrompt(data.prompt);
+        };
+        mediaRecorder.start();
+        recording = true;
+        $("record").textContent = "Stop recording";
+        $("status").textContent = "Recording…";
+      } else {
+        mediaRecorder.stop();
+        recording = false;
+        $("record").textContent = "Hold to talk — click to start/stop";
+      }
+    };
+
+    $("evalBtn").onclick = async () => {
+      const res = await fetch("/api/eval");
+      const data = await res.json();
+      $("evalView").innerHTML =
+        '<span class="bad">Naive slot accuracy: ' + (data.naive_slot_accuracy * 100).toFixed(1) + "%</span>\n" +
+        '<span class="ok">Layer slot accuracy: ' + (data.layer_slot_accuracy * 100).toFixed(1) + "%</span>\n\n" +
+        JSON.stringify(data, null, 2);
+    };
+  </script>
+</body>
+</html>

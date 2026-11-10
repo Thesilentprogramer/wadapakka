@@ -1,0 +1,94 @@
+{
+  "today": "2026-11-10",
+  "policy": "Naive path writes the first parsed triple with no read-back. Layer path parses with the Indic normalizer and always asks for confirmation before write, because Prisma does not expose usable ASR confidence. These cases are synthetic transcripts (not real borrower audio).",
+  "cases": [
+    {
+      "id": "dhai_vs_do_hazaar",
+      "note": "Spoken dhai hazaar (2500) misheard by a naive pipeline as do hazaar (2000).",
+      "naive_transcript": "do hazaar rupaye parso UPI se bharunga",
+      "layer_transcript": "dhai hazaar rupaye parso UPI se bharunga",
+      "gold": {
+        "amount_inr": 2500.0,
+        "pay_date": "2026-11-12",
+        "mode": "UPI"
+      }
+    },
+    {
+      "id": "twenty_five_thousand_vs_pachees_sau",
+      "note": "Naive ITN-style expansion to 25000; layer hears pachees sau (2500).",
+      "naive_transcript": "twenty five thousand rupaye parso UPI",
+      "layer_transcript": "pachees sau rupaye parso UPI",
+      "gold": {
+        "amount_inr": 2500.0,
+        "pay_date": "2026-11-12",
+        "mode": "UPI"
+      }
+    },
+    {
+      "id": "kal_vs_parso",
+      "note": "Relative date: kal is ambiguous and often wrong; gold is parso.",
+      "naive_transcript": "2500 rupaye kal UPI se",
+      "layer_transcript": "2500 rupaye parso UPI se",
+      "gold": {
+        "amount_inr": 2500.0,
+        "pay_date": "2026-11-12",
+        "mode": "UPI"
+      }
+    },
+    {
+      "id": "cash_vs_upi",
+      "note": "Payment mode swap, a common close-the-call guess.",
+      "naive_transcript": "2500 rupaye parso cash se",
+      "layer_transcript": "2500 rupaye parso UPI se",
+      "gold": {
+        "amount_inr": 2500.0,
+        "pay_date": "2026-11-12",
+        "mode": "UPI"
+      }
+    },
+    {
+      "id": "missing_date_naive",
+      "note": "Naive writes nothing useful without a date; layer collects a complete triple.",
+      "naive_transcript": "main 2500 rupaye UPI se bharunga",
+      "layer_transcript": "main 2500 rupaye parso UPI se bharunga",
+      "gold": {
+        "amount_inr": 2500.0,
+        "pay_date": "2026-11-12",
+        "mode": "UPI"
+      }
+    },
+    {
+      "id": "lakh_vs_hazaar",
+      "note": "Scale error: lakh vs hazaar.",
+      "naive_transcript": "do lakh rupaye parso UPI se",
+      "layer_transcript": "do hazaar rupaye parso UPI se",
+      "gold": {
+        "amount_inr": 2000.0,
+        "pay_date": "2026-11-12",
+        "mode": "UPI"
+      }
+    },
+    {
+      "id": "agle_somvaar",
+      "note": "Relative weekday. Eval today is Tuesday 10 Nov 2026, so next Monday is 16 Nov.",
+      "naive_transcript": "2500 rupaye sunday UPI se",
+      "layer_transcript": "2500 rupaye agle somvaar UPI se",
+      "gold": {
+        "amount_inr": 2500.0,
+        "pay_date": "2026-11-16",
+        "mode": "UPI"
+      }
+    },
+    {
+      "id": "clean_match",
+      "note": "Easy case both should get right. Layer still confirms rather than silent-writing.",
+      "naive_transcript": "2500 rupaye parso UPI se",
+      "layer_transcript": "2500 rupaye parso UPI se",
+      "gold": {
+        "amount_inr": 2500.0,
+        "pay_date": "2026-11-12",
+        "mode": "UPI"
+      }
+    }
+  ]
+}
