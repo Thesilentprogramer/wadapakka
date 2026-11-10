@@ -42,7 +42,7 @@ ONES = {
 FRACTIONS = {
     "sawa": 1.25, "sava": 1.25, "सवा": 1.25,
     "dedh": 1.5, "डेढ़": 1.5, "डेढ": 1.5,
-    "dhai": 2.5, "dhayi": 2.5, "adhai": 2.5, "ढाई": 2.5,
+    "dhai": 2.5, "dhayi": 2.5, "adhai": 2.5, "ढाई": 2.5, "दाई": 2.5,
 }
 
 SCALES = {
@@ -66,7 +66,7 @@ WEEKDAYS = {
 
 def _fold(text: str) -> str:
     text = text.lower().replace("hazār", "hazaar").replace("हज़ार", "हजार")
-    text = re.sub(r"[,₹]", " ", text)
+    text = re.sub(r"(?<!\d),(?!\d)|₹", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -74,68 +74,59 @@ def _fold(text: str) -> str:
 def parse_amount_inr(text: str) -> tuple[float | None, str]:
     """Return (amount, note). None if we cannot parse a single amount."""
     raw = _fold(text)
-    # Digits already present (ITN or typed).
-    digit = re.search(r"(\d{1,3}(?:,\d{2,3})+|\d+)(?:\.(\d+))?", raw)
-    spoken_scale = any(k in raw for k in FRACTIONS) or any(
-        k in raw for k in ("hazaar", "hazar", "हजार", "lakh", "lac", "लाख", "crore", "sau", "सौ")
-    )
-
-    total = 0.0
-    matched = False
-    for name, value in FRACTIONS.items():
-        if re.search(rf"\b{name}\b", raw):
-            scale = 1
-            for sname, sval in SCALES.items():
-                if re.search(rf"\b{sname}\b", raw):
-                    scale = max(scale, sval)
-            total = value * scale
-            matched = True
-            break
-    if not matched:
-        tokens = re.findall(r"[a-zA-Z\u0900-\u097F]+|\d+", raw)
-        acc = 0.0
-        i = 0
-        while i < len(tokens):
-            tok = tokens[i]
-            if tok.isdigit():
-                acc += float(tok)
-                matched = True
-            elif tok in ONES:
-                acc += ONES[tok]
-                matched = True
-            elif tok in SCALES:
-                if acc == 0:
-                    acc = 1
-                acc *= SCALES[tok]
-                total += acc
-                acc = 0
-                matched = True
-            i += 1
-        total += acc
-
-    if not matched and not digit:
+    raw = re.sub(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", " ", raw)
+    raw = re.sub(r"\b\d{10}\b", " ", raw)
+    # Find a contiguous number phrase. Unrelated dates, phone numbers and words
+    # elsewhere in the turn must not be added to the promised amount.
+    words = re.findall(r"[a-zA-Z\u0900-\u097F]+|\d[\d,]*(?:\.\d+)?", raw)
+    number_words = {**ONES, **FRACTIONS, **SCALES, "and": 0, "aur": 0}
+    candidates = []
+    run = []
+    for word in words + ["END"]:
+        if word in number_words or re.fullmatch(r"\d[\d,]*(?:\.\d+)?", word):
+            run.append(word)
+        elif run:
+            candidates.append(run)
+            run = []
+    if not candidates:
         return None, "no_amount_found"
-    if digit and not spoken_scale:
-        whole = digit.group(0).replace(",", "")
-        try:
-            return float(whole), "digit_span"
-        except ValueError:
-            return None, "bad_digit_span"
-    if matched:
-        return float(total), "spoken_form"
-    return None, "unparsed"
+    # Prefer a scaled phrase; otherwise the first plausible numeric span.
+    phrase = next((c for c in candidates if any(w in SCALES for w in c)), candidates[0])
+    if any(w in FRACTIONS for w in phrase):
+        frac = next(FRACTIONS[w] for w in phrase if w in FRACTIONS)
+        scale = next((SCALES[w] for w in phrase if w in SCALES), 1)
+        if any(w in {"sawa", "sava", "सवा"} for w in phrase):
+            base = next((float(w.replace(',', '')) if w.replace(',', '').replace('.', '', 1).isdigit() else ONES[w] for w in phrase if w in ONES or w.replace(',', '').replace('.', '', 1).isdigit()), 1)
+            value = (base + .25) * scale
+        else:
+            value = frac * scale
+    else:
+        value = 0.0
+        current = 0.0
+        for word in phrase:
+            if word in SCALES:
+                current = (current or 1) * SCALES[word]
+                value += current
+                current = 0
+            elif word.replace(',', '').replace('.', '', 1).isdigit():
+                current += float(word.replace(',', ''))
+            else:
+                current += ONES.get(word, 0)
+        value += current
+    if value <= 0 or value > 10_000_000:
+        return None, "implausible_amount"
+    return float(value), "spoken_form" if any(w in number_words for w in phrase) else "digit_span"
 
 
 def parse_relative_date(text: str, today: date | None = None) -> tuple[date | None, str]:
     today = today or date.today()
     raw = _fold(text)
-    if re.search(r"\bparso\b|\bपरसों\b|\bपरसो\b", raw):
+    if re.search(r"\bparso\b|परसों|परसो", raw):
         return today + timedelta(days=2), "parso"
-    if re.search(r"\baaj\b|\bआज\b|\btoday\b", raw):
+    if re.search(r"\baaj\b|आज|\btoday\b", raw):
         return today, "aaj"
-    if re.search(r"\bkal\b|\bकल\b", raw):
-        # Kal is ambiguous (yesterday or tomorrow). Force confirmation.
-        return today + timedelta(days=1), "kal_ambiguous"
+    if re.search(r"\bkal\b|कल", raw):
+        return None, "kal_ambiguous"
     m = re.search(r"\b(agle|agla|next|अगले|अगला)\s+([a-z\u0900-\u097F]+)", raw)
     if m:
         day = WEEKDAYS.get(m.group(2))
@@ -162,8 +153,8 @@ def parse_mode(text: str) -> tuple[str | None, str]:
     raw = _fold(text)
     if re.search(r"\bupi\b|\byu.?p.?i\b|\byupi\b", raw):
         return "UPI", "upi"
-    if re.search(r"\bcash\b|\bnagad\b|\bनकद\b", raw):
+    if re.search(r"\bcash\b|\bnagad\b|\bनकद\b|कैश", raw):
         return "CASH", "cash"
-    if re.search(r"\bneft\b|\bimps\b|\brtgs\b|\bbank\b|\btransfer\b", raw):
+    if re.search(r"\bneft\b|\bimps\b|\brtgs\b|\bbank\b|\btransfer\b|बैंक|ट्रांसफर", raw):
         return "BANK", "bank"
     return None, "no_mode_found"

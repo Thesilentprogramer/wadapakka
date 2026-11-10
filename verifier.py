@@ -45,8 +45,6 @@ def assess(
     amount_ok = primary.amount_inr is not None and primary.amount_inr > 0
     if secondary:
         amount_ok = amount_ok and _amounts_agree(primary.amount_inr, secondary.amount_inr)
-    if primary.amount_note == "kal_ambiguous":
-        amount_ok = amount_ok  # unused
     decisions["amount_inr"] = {
         "value": primary.amount_inr,
         "trusted": bool(amount_ok) and not require_confirm_always,
@@ -54,8 +52,9 @@ def assess(
         "reason": _reason(amount_ok, primary.amount_note, secondary.amount_note if secondary else None),
     }
     # Date
-    date_ok = primary.pay_date is not None and primary.date_note != "kal_ambiguous"
-    if secondary and secondary.pay_date:
+    anchor = today or date.today()
+    date_ok = primary.pay_date is not None and primary.date_note != "kal_ambiguous" and primary.pay_date >= anchor.isoformat()
+    if secondary:
         date_ok = date_ok and primary.pay_date == secondary.pay_date
     if primary.date_note == "kal_ambiguous":
         date_ok = False
@@ -67,7 +66,7 @@ def assess(
     }
     # Mode
     mode_ok = primary.mode is not None
-    if secondary and secondary.mode:
+    if secondary:
         mode_ok = mode_ok and primary.mode == secondary.mode
     decisions["mode"] = {
         "value": primary.mode,
@@ -77,7 +76,7 @@ def assess(
     }
 
     pending = [name for name, d in decisions.items() if d["needs_confirm"] and d["value"] is not None]
-    missing = [name for name, d in decisions.items() if d["value"] is None]
+    missing = [name for name, d in decisions.items() if d["value"] is None or (name == "pay_date" and not date_ok and primary.date_note in {"kal_ambiguous", "numeric_date", "invalid_numeric_date"})]
     return {
         "slots": primary.as_dict(),
         "decisions": decisions,

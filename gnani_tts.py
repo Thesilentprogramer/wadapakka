@@ -19,6 +19,9 @@ import os
 from typing import Any
 
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
 
 TTS_REST_URL = "https://api.vachana.ai/api/v1/tts/inference"
 DEFAULT_MODEL = os.getenv("GNANI_TTS_MODEL", "timbre-v2.5")

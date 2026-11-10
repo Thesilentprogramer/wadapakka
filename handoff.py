@@ -46,6 +46,7 @@ def detect_handoff(transcript: str) -> dict:
 
 
 def brief(slots: dict, transcript: str, reason: str) -> str:
+    transcript = " ".join(transcript.split())[:180]
     amount = slots.get("amount_inr")
     when = slots.get("pay_date")
     mode = slots.get("mode")

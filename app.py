@@ -25,6 +25,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from gnani_stt import dual_pass, transcribe_rest
 from gnani_tts import synthesize
@@ -202,6 +205,11 @@ def _handle_turn(
     session = sessions.get(session_id)
     if not session:
         raise HTTPException(404, "unknown session")
+    if session["state"] == State.WRITTEN.value and mode == "layer" and text_is_confirmation(transcript):
+        slots = session["slots"]
+        result = ledger.commit(session["id"], slots["amount_inr"], slots["pay_date"], slots["mode"])
+        event = _record_turn(session, mode, transcript, stt_meta, latency_ms, {"decision": "duplicate_confirmation", "commit": result})
+        return {"session": session, "transcript": transcript, "prompt": "Promise pehle hi likh diya gaya hai.", "commit": result, "event": event}
     if session["state"] in {State.WRITTEN.value, State.HANDOFF.value, State.REFUSED.value}:
         raise HTTPException(409, f"session already {session['state']}")
 
@@ -285,7 +293,7 @@ def _layer_turn(
     # Yes / no during confirmation
     if session["state"] == State.CONFIRMING.value:
         lowered = text.lower()
-        yes = any(w in lowered for w in ("haan", "han", "yes", "sahi", "theek", "ok", "okay", "हाँ", "हां"))
+        yes = text_is_confirmation(lowered)
         no = any(w in lowered for w in ("nahi", "galat", "no", "wrong", "नहीं", "गलत"))
         if yes and not no:
             slots = session["slots"]
@@ -306,6 +314,8 @@ def _layer_turn(
                 "event": event,
             }
         if no:
+            session["slots"] = {}
+            session["pending"] = []
             _move(session, State.CLARIFY)
             _move(session, State.COLLECTING)
             event = _record_turn(session, "layer", text, stt_meta, latency_ms, {"decision": "correction_requested"})
@@ -317,13 +327,26 @@ def _layer_turn(
             }
 
     verdict = assess(text, verbatim_text=verbatim, require_confirm_always=True)
+    if session["state"] == State.CLARIFY.value:
+        for name in ("amount_inr", "pay_date", "mode"):
+            if verdict["slots"][name] is None and session["slots"].get(name) is not None:
+                verdict["slots"][name] = session["slots"][name]
+                verdict["decisions"][name]["value"] = session["slots"][name]
+                if name in verdict["missing"]:
+                    verdict["missing"].remove(name)
+                if name not in verdict["pending_confirm"]:
+                    verdict["pending_confirm"].append(name)
     session["slots"] = verdict["slots"]
     session["pending"] = verdict["pending_confirm"]
 
     if verdict["missing"]:
         if session["state"] != State.CLARIFY.value:
             _move(session, State.CLARIFY)
-        prompt = "Mujhe amount, tareekh aur payment mode chahiye. " + readback_prompt(verdict["decisions"])
+        if verdict["slots"]["date_note"] == "kal_ambiguous":
+            prompt = "Kal ka matlab clear nahi hai. Kripya exact tareekh DD/MM/YYYY mein batayiye."
+        else:
+            names = {"amount_inr": "amount", "pay_date": "tareekh", "mode": "payment mode"}
+            prompt = "Kripya " + ", ".join(names[x] for x in verdict["missing"]) + " batayiye."
         event = _record_turn(session, "layer", text, stt_meta, latency_ms, {
             "decision": "need_more_slots",
             "verdict": verdict,
@@ -337,6 +360,11 @@ def _layer_turn(
         "verdict": verdict,
     })
     return {"session": session, "transcript": text, "prompt": prompt, "verdict": verdict, "event": event}
+
+
+def text_is_confirmation(text: str) -> bool:
+    import re
+    return bool(re.search(r"\b(haan|han|yes|sahi|theek|ok|okay)\b|हाँ|हां", text.lower())) and not bool(re.search(r"\b(nahi|galat|no|wrong)\b|नहीं|गलत", text.lower()))
 
 
 def _record_turn(

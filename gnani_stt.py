@@ -19,6 +19,9 @@ import os
 from typing import Any
 
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
 
 STT_REST_URL = "https://api.vachana.ai/stt/v3"
 DEFAULT_MODEL = os.getenv("GNANI_STT_MODEL", "prisma-v3.0")
