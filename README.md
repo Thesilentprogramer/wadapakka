@@ -2,7 +2,7 @@
 
 A reliability layer between Gnani Prisma STT and Timbre TTS for Hinglish promise-to-pay calls. It turns speech into a proposed amount, date, and payment method; reads the proposal back; and writes to the ledger only after confirmation.
 
-**Live demo:** https://controlling-redeem-plymouth-analog.trycloudflare.com (temporary tunnel; requires the local server to remain running). For a persistent deployment, use the [Render blueprint](https://render.com/deploy?repo=https://github.com/Thesilentprogramer/wadapakka) and set `GNANI_API_KEY` in Render.
+**Live demo:** https://adapters-alternate-carrying-wool.trycloudflare.com (temporary tunnel; requires the local server to remain running). For a persistent deployment, use the [Render blueprint](https://render.com/deploy?repo=https://github.com/Thesilentprogramer/wadapakka) and set `GNANI_API_KEY` in Render.
 
 ![WadaPakka landing page](docs/shots/landing_final.png)
 
