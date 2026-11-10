@@ -91,6 +91,25 @@ The ledger and sessions are in memory and reset on restart; production needs dur
 
 ## UI and barge-in verification (10 November 2026)
 
-The static interface keeps the existing API and controls while adding a live call stage, status pill, mic orb and meter, slot state cards, stats, and a collapsible newest-first event timeline. The visual treatment adapts the interactive surface idea from [21st.dev Spotlight Card](https://21st.dev/@jahed/components/spotlight-card), the labeled rail and value pattern from [BoardUI Meter](https://www.boardui.com/components/meter), and the audio control layout vocabulary from [Opensource UI Now Playing Bar](https://opensourceui.in/components/now-playing-bar). No library code was copied.
+The original static interface added a live call stage, status pill, mic orb and meter, slot state cards, stats, and a collapsible newest-first event timeline. It remains as the fallback when the React build is absent.
 
 On port 8001, `scripts/stream_smoke.py docs/audio/dhai_hazaar.wav` reported 698 ms speech-end to final STT and 1,011 ms speech-end to first TTS byte. `scripts/barge_smoke.py docs/audio/dhai_hazaar.wav` received agent TTS, injected the caller WAV 450 ms into its playback, and observed Prisma cancellation 266 ms after caller WAV onset; server speech-start to cancellation rounded to 0 ms. Use `--audible` to play streamed agent PCM via ffplay during this test. These are single scripted observations, not a real microphone benchmark.
+
+## React frontend
+
+The interface now lives in `web/` (Vite, React, TypeScript, Tailwind CSS, Radix-style button primitives, Framer Motion and Lucide icons). FastAPI serves `web/dist` at `/` when it has been built and falls back to the former `static/index.html` when the build is absent. The previous page remains available at `/static/index.html`. The backend REST and WebSocket contracts are unchanged.
+
+For development, run FastAPI on port 8001 and Vite separately:
+
+```bash
+.venv/bin/uvicorn app:app --port 8001
+cd web
+npm install
+npm run dev
+```
+
+Open the Vite URL printed by the command. Its `/api` proxy forwards REST and WebSocket traffic to port 8001. For a built page, run `npm run build` in `web/`, then start or restart FastAPI on port 8001 and open `http://127.0.0.1:8001`.
+
+The React design adapts three published component patterns: [21st.dev Spotlight Card](https://21st.dev/@jahed/components/spotlight-card) for pointer-responsive surface emphasis, [BoardUI Meter](https://www.boardui.com/components/meter) for a labeled level rail, and [Opensource UI Now Playing Bar](https://opensourceui.in/components/now-playing-bar) for compact audio information and controls. These are original adaptations; no source from the component pages was copied. L1 and L2 call logic is wrapped in React hooks, and the AudioWorklet and barge VAD algorithms are retained from the static implementation.
+
+Verification on 10 November 2026: `npm run build` completed with no TypeScript errors; `.venv/bin/pytest -q` passed 10 tests. A port-8001 typed-turn smoke check produced a naive write, a layer read back, and a confirmed write. `scripts/stream_smoke.py` received a Prisma transcript and first Timbre audio byte on the port-8001 WebSocket. A headless Playwright page check could not launch Chrome in this sandbox, so visual layout and real microphone behavior remain unverified here.

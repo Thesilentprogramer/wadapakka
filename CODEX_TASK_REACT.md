@@ -1,0 +1,12 @@
+# Port the frontend to React (deadline tonight 11:59 PM IST; finish in ~2 hours)
+
+The current UI is static HTML/JS in static/ (index.html, live.js, live-worklet.js, barge-vad.js, revamp.css). Port it to a React frontend in `web/`: Vite + React + TypeScript + Tailwind CSS, with shadcn/ui-style components, framer-motion for animations, and lucide-react icons. Use or adapt real components from 21st.dev (https://21st.dev), BoardUI (https://www.boardui.com/components) and opensourceui.in (https://opensourceui.in/). Fetch their pages and copy or adapt component code where licences allow; note which ones you used in README.
+
+Requirements:
+- Feature parity with every current feature: the L1 turn-based mode (mic record + typed turns, naive vs layer split, read-back, haan/nahi, ledger, handoff, eval button) and L2 live streaming (AudioWorklet PCM to the backend WebSocket, chunked TTS playback, the barge-in logic from barge-vad.js including ducking, the 300 ms sustained speech rule, noise calibration, grace window, the headphones toggle, stats bar, collapsible newest-first timeline). Reuse the existing audio/VAD JS modules as-is, wrapped in hooks (useLiveCall, useTurnCall); don't rewrite the audio logic unless needed. Keep the worklet file served correctly.
+- Keep all backend API contracts unchanged.
+- Layout: hero header (WadaPakka, "Reliability layer for Gnani voice agents", model badges Prisma v3.0 / Timbre v2.5), mode tabs L1/L2, a big animated mic orb with a level meter, call status pill, slot cards animating pending -> reading back -> confirmed, naive vs layer split, ledger table, handoff brief card, stats bar, timeline. Dark theme, premium look, readable at 1080p for a screen recording.
+- FastAPI serves the built `web/dist` at `/` (fall back to the old static UI if dist is missing). The Vite dev server proxies /api and websockets to :8001 for development.
+- Run `npm install` and `npm run build` in web/ and make sure it builds with no TypeScript errors. Run `.venv/bin/pytest`; all must pass. Try a headless browser check (Playwright) of the built page if it can launch; if not, say so.
+- Test the backend on port 8001 (8000 is the running server). Don't git commit (.git is read-only for you). Add web/node_modules to .gitignore. Never print the .env key. Don't use Inya/Agent Builder.
+Print a short summary: what was ported, the components used, build/test results, and anything unverified.

@@ -4,3 +4,6 @@ __pycache__/
 .venv/
 server.log
 codex_*.log
+
+web/node_modules/
+web/*.tsbuildinfo

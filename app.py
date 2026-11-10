@@ -69,10 +69,13 @@ def _prepare_audio(raw: bytes, filename: str, content_type: str) -> tuple[bytes,
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
+WEB_DIST = ROOT / "web" / "dist"
 
 app = FastAPI(title="WadaPakka reliability layer", version="0.1.0")
 if STATIC.exists():
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
+if WEB_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="web-assets")
 
 sessions: dict[str, dict[str, Any]] = {}
 ledger = Ledger()
@@ -92,7 +95,7 @@ def _move(session: dict[str, Any], nxt: State) -> None:
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+    return FileResponse((WEB_DIST if WEB_DIST.is_dir() else STATIC) / "index.html")
 
 
 @app.post("/api/session")
@@ -489,3 +492,9 @@ def health() -> dict[str, Any]:
 async def live(session_id: str, websocket: WebSocket) -> None:
     from streaming import live_socket
     await live_socket(websocket, session_id)
+
+
+# Vite copies public worklet assets to the root of dist. Keep this mount last so
+# REST and WebSocket routes continue to take precedence over frontend files.
+if WEB_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
