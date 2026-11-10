@@ -351,13 +351,14 @@ function PromiseLedger({ rows, results }: { rows: ReturnType<typeof useTurnCall>
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[540px] border-collapse text-left text-sm">
+        <caption className="sr-only">Promises recorded by the turn-based pipelines</caption>
         <thead>
           <tr className="border-b border-[color:var(--line)] text-xs text-[var(--muted)]">
-            <th className="px-2 py-3 font-semibold">Pipeline</th>
-            <th className="px-2 py-3 font-semibold">Amount</th>
-            <th className="px-2 py-3 font-semibold">Date</th>
-            <th className="px-2 py-3 font-semibold">Method</th>
-            <th className="px-2 py-3 font-semibold">Commit</th>
+            <th scope="col" className="px-2 py-3 font-semibold">Pipeline</th>
+            <th scope="col" className="px-2 py-3 font-semibold">Amount</th>
+            <th scope="col" className="px-2 py-3 font-semibold">Date</th>
+            <th scope="col" className="px-2 py-3 font-semibold">Method</th>
+            <th scope="col" className="px-2 py-3 font-semibold">Commit</th>
           </tr>
         </thead>
         <tbody>
@@ -518,6 +519,9 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
             <span className="pill inline-flex items-center gap-2"><FileCheck2 size={13} aria-hidden="true" />{ledger.length} {ledger.length === 1 ? 'write' : 'writes'}</span>
           </div>
           <PromiseLedger rows={ledger} results={results} />
+          <div id="handoff-desk" className="handoff-desk" aria-label="Handoff desk">
+            <h3 className="text-sm font-semibold text-[var(--ink)]">Handoff desk</h3>
+            {!results.layer?.handoff_brief && <p className="mt-1 text-sm text-[var(--muted)]">A handoff brief will appear here when the reliability layer flags a call for review.</p>}
           <AnimatePresence>
             {results.layer?.handoff_brief && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-4 rounded-xl border border-[#f5d99c] bg-[#fff7e9] p-4">
@@ -526,6 +530,7 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
               </motion.div>
             )}
           </AnimatePresence>
+          </div>
         </section>
       </div>
 

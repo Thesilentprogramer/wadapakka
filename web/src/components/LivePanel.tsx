@@ -290,7 +290,8 @@ export default function LivePanel({ active = true, onPipelineUpdate }: LivePanel
           {ledgerError && <p role="status" className="mb-3 text-xs text-[var(--red)]">Ledger unavailable: {ledgerError}</p>}
           <div className="tablewrap">
             <table>
-              <thead><tr><th>Pipeline</th><th>Amount</th><th>Date</th><th>Mode</th><th>Commit</th></tr></thead>
+              <caption className="sr-only">Promises recorded by the live pipelines</caption>
+              <thead><tr><th scope="col">Pipeline</th><th scope="col">Amount</th><th scope="col">Date</th><th scope="col">Mode</th><th scope="col">Commit</th></tr></thead>
               <tbody>
                 {ledgerRows.length ? ledgerRows.map((row, index) => (
                   <tr key={`${row.commit_key}-${index}`}>
