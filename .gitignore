@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 .venv/
+server.log
+codex_*.log

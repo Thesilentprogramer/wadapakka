@@ -14,6 +14,8 @@ HANDOFF_PATTERNS = [
     r"insan",
     r"human",
     r"agent se baat",
+    r"agent do",
+    r"manager",
     r"operator",
     r"supervisor",
     r"kisi se baat",

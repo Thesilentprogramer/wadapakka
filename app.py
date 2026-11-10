@@ -1,14 +1,4 @@
-"""WadaPakka reliability layer — FastAPI app.
-
-Turn-taking over REST Prisma STT (POST /stt/v3), not full-duplex streaming.
-Browser WebSocket cannot send the x-vad-* headers Prisma streaming needs,
-and the official Python SDK does not expose those VAD knobs. A proxy plus
-PCM frame pacing is possible later; tonight the shippable path is recorded
-turns of at most 30 seconds.
-
-Set GNANI_API_KEY before calling live STT/TTS. Text-only routes and /api/eval
-run without a key so the skeleton can be exercised immediately.
-"""
+"""WadaPakka reliability layer — turn-based REST plus live streaming WebSocket."""
 
 from __future__ import annotations
 
@@ -21,7 +11,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -493,3 +483,9 @@ def health() -> dict[str, Any]:
         "sessions": len(sessions),
         "ledger": len(ledger.rows),
     }
+
+
+@app.websocket("/api/live/{session_id}")
+async def live(session_id: str, websocket: WebSocket) -> None:
+    from streaming import live_socket
+    await live_socket(websocket, session_id)

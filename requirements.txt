@@ -5,3 +5,5 @@ httpx==0.28.1
 pydantic==2.12.3
 python-dotenv==1.2.1
 pytest==8.4.2
+websockets==17.4
+certifi>=2025.0.0

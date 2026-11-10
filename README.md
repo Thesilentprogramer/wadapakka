@@ -20,20 +20,45 @@ The key is loaded from `.env` with `python-dotenv`. `.env` is ignored by Git. Ca
 
 ```mermaid
 flowchart LR
-  B[Browser: one turn] --> N[Naive path]
-  B --> P[Prisma v3.0 STT]
-  P --> Z[Indic normalizer]
-  Z --> V[Verifier]
-  V -->|incomplete or kal| Q[Clarify]
-  V -->|complete| T[Timbre v2.5 read back]
-  T -->|haan| L[Idempotent PTP ledger]
-  V -->|human request| H[Stop and handoff brief]
-  N -->|first complete parse| L
-  P --> O[Turn timeline]
-  V --> O
+  B[Browser] -->|L1 turn clip| R[REST Prisma]
+  B -->|L2 16 kHz PCM frames| W[FastAPI WebSocket proxy]
+  W --> P[Prisma streaming VAD]
+  P -->|speech_start| X[Cancel TTS and stop playback]
+  P -->|final transcript| Z[Normalizer and verifier]
+  R --> Z
+  Z --> Q[State machine]
+  Q -->|read back| T[Timbre streaming TTS]
+  T -->|PCM chunks| B
+  Q -->|fully heard and haan| L[Idempotent PTP ledger]
+  Q -->|human request| H[Handoff brief]
+  P --> O[Live timeline and latency metrics]
+  T --> O
 ```
 
-Prisma REST (`POST /stt/v3`) is used with `model=prisma-v3.0`, `format=transcribe`, `language_code=hi-IN,en-IN`. Timbre REST (`POST /api/v1/tts/inference`) uses `model=timbre-v2.5`, voice `Poorvi`, language `hi-en`, 16 kHz mono WAV. Prisma REST has no usable confidence field, so every critical slot requires read back. Optional `format=verbatim` dual pass can flag disagreement, but agreement is an application signal, not model confidence. The browser records turns, not a full duplex stream.
+Prisma REST (`POST /stt/v3`) is used for L1 with `model=prisma-v3.0`, `format=transcribe`, `language_code=hi-IN,en-IN`. Timbre REST (`POST /api/v1/tts/inference`) uses `model=timbre-v2.5`, voice `Poorvi`, language `hi-en`, 16 kHz mono WAV. Prisma REST has no usable confidence field, so every critical slot requires read back. Optional `format=verbatim` dual pass can flag disagreement, but agreement is an application signal, not model confidence.
+
+## Layer 2: live streaming and barge-in
+
+Run the server on port **8001** to keep the existing port 8000 L1 process free:
+
+```bash
+.venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn app:app --port 8001
+```
+
+Open [http://127.0.0.1:8001](http://127.0.0.1:8001), choose **Live streaming (L2)**, then **Start live call** and allow microphone access. The browser AudioWorklet resamples microphone audio to 16 kHz mono 16-bit PCM and sends 1,024 byte frames at real-time cadence. The backend attaches the secret key and VAD headers to Prisma. Timbre WebSocket audio chunks are played as they arrive; REST inference is a fallback. Echo cancellation and noise suppression are requested from the browser.
+
+To demo barge-in, start talking while the agent reads the amount/date/mode back. A fast local energy trigger stops scheduled playback immediately; Prisma `speech_start` also cancels the upstream Timbre task. The live timeline marks the agent turn interrupted. If read back was interrupted, saying **haan** cannot write the promise. The agent repeats the read back; wait until it finishes, then say **haan** to confirm. Say **insaan se baat karni hai**, **agent do**, or **manager** for a human handoff and a one-line brief.
+
+The stats bar shows speech end → final STT, speech end → first TTS audio byte, and barge-in reaction. These are per-turn observations, averaged in the bar. The local reaction time measures stopping scheduled browser audio; the backend also reports Prisma `speech_start` → TTS cancellation. They are different clocks and are labeled separately in the timeline.
+
+A real scripted run on 10 November 2026 streamed `docs/audio/dhai_hazaar.wav` through port 8001 at 32 ms/frame. It returned `मैं परसों 2,500 रुपये यू पी आई से दे दूंगा।`: **707, 714, and 755 ms** from speech end to final STT; **1,142, 1,049, and 1,269 ms** from speech end to first TTS audio byte; Prisma reported **156, 144, and 145 ms** STT latency. These are three runs of one clean generated clip, not a distribution or mic/barge-in benchmark. Reproduce with:
+
+```bash
+.venv/bin/python scripts/stream_smoke.py docs/audio/dhai_hazaar.wav
+```
+
+The live endpoint accepted only `language_code=hi-IN` in this run although the documentation describes a comma-separated v3 list. [Wire details and source links](docs/api_notes.md) record that discrepancy.
 
 ## Evaluation
 
@@ -58,7 +83,8 @@ Prisma REST (`POST /stt/v3`) is used with `model=prisma-v3.0`, `format=transcrib
 | `GET /api/eval` | Text fixture result |
 | `GET /api/tts?text=` | Timbre WAV |
 | `GET /health` | Liveness and key presence |
+| `WS /api/live/{session_id}` | L2 PCM, events, TTS audio and cancellation |
 
 ## Limits
 
-The ledger and sessions are in memory and reset on restart; production needs durable, transactional storage, authentication, retention controls and account scoped idempotency. The parser handles a defined set of Indic/Hinglish phrases and can miss or misinterpret new wording. Prisma can substitute a plausible wrong number; read back lowers silent write risk but only a real borrower can verify it. The generated audio eval is tiny, clean, synthetic and nondeterministic across STT calls. No real borrower, noisy channel or human confirmation accuracy has been measured. The demo is turn based REST, so barge in stops the next turn, not current TTS playback. `kal` is held for clarification because it can refer to either yesterday or tomorrow.
+The ledger and sessions are in memory and reset on restart; production needs durable, transactional storage, authentication, retention controls and account scoped idempotency. The parser handles a defined set of Indic/Hinglish phrases and can miss or misinterpret new wording. Prisma can substitute a plausible wrong number; read back lowers silent write risk but only a real borrower can verify it. The generated audio eval is tiny, clean, synthetic and nondeterministic across STT calls. No real borrower, noisy channel or human confirmation accuracy has been measured. L2 is a local demo proxy; it has no authentication or durable session store. Browser local energy VAD can false-trigger in noisy rooms despite echo cancellation, and mic barge-in reaction has not been measured on a real call. `kal` is held for clarification because it can refer to either yesterday or tomorrow.
