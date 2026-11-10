@@ -1,4 +1,4 @@
-import{r as P,j as Ie}from"./index-BjQSRUcR.js";const Ge=8,se=4,ue=24,Pe=1.2,Oe=.7,Xe=.015,st=2.4,Q=60,q=100,ut=16,lt=.78,ke=["#1e3fd8","#f6f8ff","#a5d8ff","#38bdf8"],Ne=" =+xX0S8#@",qe='"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',ft={horizon:0,pinch:1,rise:2,eclipse:3},mt={none:0,wave:1,burst:2},dt=`#version 300 es
+import{r as P,j as Ie}from"./index-aL6idrcX.js";const Ge=8,se=4,ue=24,Pe=1.2,Oe=.7,Xe=.015,st=2.4,Q=60,q=100,ut=16,lt=.78,ke=["#1e3fd8","#f6f8ff","#a5d8ff","#38bdf8"],Ne=" =+xX0S8#@",qe='"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',ft={horizon:0,pinch:1,rise:2,eclipse:3},mt={none:0,wave:1,burst:2},dt=`#version 300 es
 out vec2 vUv;
 void main() {
   vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));

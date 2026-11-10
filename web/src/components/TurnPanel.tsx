@@ -367,7 +367,7 @@ function PromiseLedger({ rows, results }: { rows: ReturnType<typeof useTurnCall>
             <tr><td colSpan={5} className="px-2 py-5 text-sm text-[var(--muted)]">Confirmed promises appear here after a call.</td></tr>
           ) : rows.map((row) => (
             <tr key={row.commit_key} className="border-b border-[color:var(--line)] last:border-0">
-              <td className="px-2 py-3 font-medium text-[var(--primary)]">{row.session_id === naiveId ? 'Naive' : 'Layer'}</td>
+              <td className="px-2 py-3 font-medium text-[var(--primary)]">{row.session_id === naiveId ? 'Naive' : row.session_id === results.layer?.session.id ? 'Layer' : 'Other session'}</td>
               <td className="px-2 py-3">₹{row.amount_inr.toLocaleString('en-IN')}</td>
               <td className="px-2 py-3">{row.pay_date}</td>
               <td className="px-2 py-3">{row.mode}</td>

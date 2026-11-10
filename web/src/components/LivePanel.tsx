@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, AudioLines, Headphones, LoaderCircle, Mic2, Radio, Volume2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Meter } from './ui/Meter';
 import { useLiveCall, type PipelineKind, type PipelineResult } from '../hooks/useLiveCall';
 
@@ -74,20 +74,8 @@ export default function LivePanel({ active = true, onPipelineUpdate }: LivePanel
     if (!active && (call.isRunning || call.isStarting)) call.endCall();
   }, [active, call.endCall, call.isRunning, call.isStarting]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const sessionIds = new Set([
-      call.results.naive?.session?.id,
-      call.results.layer?.session?.id,
-    ].filter((id): id is string => Boolean(id)));
-
-    if (!sessionIds.size) {
-      setLedgerRows([]);
-      setLedgerError('');
-      return;
-    }
-
-    void fetch('/api/ledger')
+  const refreshLedger = useCallback(async () => {
+    await fetch('/api/ledger')
       .then(async response => {
         let data: { rows?: LedgerRow[]; detail?: unknown };
         try { data = await response.json(); }
@@ -99,17 +87,15 @@ export default function LivePanel({ active = true, onPipelineUpdate }: LivePanel
         return Array.isArray(data.rows) ? data.rows : [];
       })
       .then(rows => {
-        if (!cancelled) {
-          setLedgerRows(rows.filter(row => sessionIds.has(row.session_id)));
-          setLedgerError('');
-        }
+        setLedgerRows(rows);
+        setLedgerError('');
       })
       .catch(error => {
-        if (!cancelled) setLedgerError(error instanceof Error ? error.message : String(error));
+        setLedgerError(error instanceof Error ? error.message : String(error));
       });
+  }, []);
 
-    return () => { cancelled = true; };
-  }, [call.results]);
+  useEffect(() => { if (active) void refreshLedger(); }, [active, call.results, refreshLedger]);
 
   async function runEvaluation() {
     setEvalBusy(true);
@@ -283,9 +269,9 @@ export default function LivePanel({ active = true, onPipelineUpdate }: LivePanel
           <div className="mb-4 flex items-start justify-between gap-3">
             <div>
               <h2 className="section-title m-0">Promise ledger</h2>
-              <p className="muted m-0 mt-1 text-xs">Writes from this live call’s paired sessions.</p>
+              <p className="muted m-0 mt-1 text-xs">Writes across active sessions.</p>
             </div>
-            <span className="pill !text-[9px]">{ledgerRows.length} {ledgerRows.length === 1 ? 'write' : 'writes'}</span>
+            <div className="flex items-center gap-2"><span className="pill !text-[9px]">{ledgerRows.length} {ledgerRows.length === 1 ? 'write' : 'writes'}</span><button type="button" className="button button-secondary" onClick={() => void refreshLedger()}>Refresh</button></div>
           </div>
           {ledgerError && <p role="status" className="mb-3 text-xs text-[var(--red)]">Ledger unavailable: {ledgerError}</p>}
           <div className="tablewrap">
@@ -295,7 +281,7 @@ export default function LivePanel({ active = true, onPipelineUpdate }: LivePanel
               <tbody>
                 {ledgerRows.length ? ledgerRows.map((row, index) => (
                   <tr key={`${row.commit_key}-${index}`}>
-                    <td>{row.session_id === call.results.naive?.session?.id ? 'Naive' : 'Layer'}</td>
+                    <td>{row.session_id === call.results.naive?.session?.id ? 'Naive' : row.session_id === call.results.layer?.session?.id ? 'Layer' : 'Other session'}</td>
                     <td>₹{Number(row.amount_inr).toLocaleString('en-IN')}</td>
                     <td>{row.pay_date}</td>
                     <td>{row.mode}</td>
