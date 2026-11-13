@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "today": "2026-11-13",
+  "description": "Deterministic synthetic full-conversation reliability scenarios. A text turn is not live-audio evidence; the correction case models a transcript arriving during read-back.",
+  "cases": [
+    {
+      "id": "angry_then_valid_promise",
+      "persona": "Angry",
+      "turns": [
+        {"name": "angry_opening", "transcript": "Stop bothering me.", "expect_state": "CLARIFY", "expect_rows": 0, "forbidden_speech": ["refuse", "can't help"]},
+        {"name": "offer", "transcript": "I will pay ₹2,000 on 15 November 2026 by UPI.", "expect_state": "CONFIRMING", "expect_rows": 0},
+        {"name": "affirm", "transcript": "haan", "expect_state": "WRITTEN", "expect_rows": 1, "proposal_id_from": "offer"}
+      ],
+      "gold": {"rows": [{"amount_inr": 2000, "pay_date": "2026-11-15", "mode": "UPI"}], "handoff_reason": null, "valid_promise": true}
+    },
+    {
+      "id": "partial_payment_is_saved_as_offered_amount",
+      "persona": "Partial payer",
+      "turns": [
+        {"name": "offer", "transcript": "Only ₹300 of ₹2,500 on 15 November 2026 by UPI.", "expect_state": "CONFIRMING", "expect_rows": 0},
+        {"name": "affirm", "transcript": "हाँ, सही है", "expect_state": "WRITTEN", "expect_rows": 1, "proposal_id_from": "offer"}
+      ],
+      "gold": {"rows": [{"amount_inr": 300, "pay_date": "2026-11-15", "mode": "UPI"}], "handoff_reason": null, "valid_promise": true}
+    },
+    {
+      "id": "hardship_handoff",
+      "persona": "Hardship",
+      "turns": [
+        {"name": "disclose_hardship", "transcript": "Job chali gayi, abhi nahi de sakta.", "expect_state": "HANDOFF", "expect_rows": 0}
+      ],
+      "gold": {"rows": [], "handoff_reason": "hardship", "valid_promise": false}
+    },
+    {
+      "id": "wrong_person_handoff",
+      "persona": "Wrong person",
+      "turns": [
+        {"name": "wrong_number", "transcript": "Ravi yahan nahi; wrong number.", "expect_state": "HANDOFF", "expect_rows": 0}
+      ],
+      "gold": {"rows": [], "handoff_reason": "wrong_person", "valid_promise": false}
+    },
+    {
+      "id": "dispute_handoff",
+      "persona": "Dispute",
+      "turns": [
+        {"name": "dispute_amount", "transcript": "Yeh amount galat hai, statement bhejo.", "expect_state": "HANDOFF", "expect_rows": 0}
+      ],
+      "gold": {"rows": [], "handoff_reason": "dispute", "valid_promise": false}
+    },
+    {
+      "id": "evasive_stays_unconfirmed",
+      "persona": "Evasive",
+      "turns": [
+        {"name": "noncommitment", "transcript": "Dekhenge, shayad kal.", "expect_state": "CLARIFY", "expect_rows": 0, "forbidden_speech": ["promise likh diya", "promise recorded"]}
+      ],
+      "gold": {"rows": [], "handoff_reason": null, "valid_promise": false}
+    },
+    {
+      "id": "ai_disclosure_then_promise",
+      "persona": "AI disclosure",
+      "turns": [
+        {"name": "ask_disclosure", "transcript": "Are you an AI assistant?", "expect_rows": 0, "response_contains": ["ai"], "forbidden_speech": ["i am human", "real person"]},
+        {"name": "offer", "transcript": "Only ₹300 on 15 November 2026 by UPI.", "expect_state": "CONFIRMING", "expect_rows": 0},
+        {"name": "affirm", "transcript": "haan", "expect_state": "WRITTEN", "expect_rows": 1, "proposal_id_from": "offer"}
+      ],
+      "gold": {"rows": [{"amount_inr": 300, "pay_date": "2026-11-15", "mode": "UPI"}], "handoff_reason": null, "valid_promise": true}
+    },
+    {
+      "id": "date_correction_invalidates_old_readback",
+      "persona": "Date change and barge-in",
+      "turns": [
+        {"name": "first_offer", "transcript": "₹2,000 on 15 November 2026 by UPI.", "expect_state": "CONFIRMING", "expect_rows": 0},
+        {"name": "interrupt_with_correction", "transcript": "16 November 2026.", "expect_state": "CONFIRMING", "expect_rows": 0, "simulated_barge_in": true},
+        {"name": "late_old_yes", "transcript": "haan", "expect_rows": 0, "proposal_id_from": "first_offer", "expect_commit_status": "stale_proposal"},
+        {"name": "fresh_readback_yes", "transcript": "haan", "expect_state": "WRITTEN", "expect_rows": 1, "proposal_id_from": "interrupt_with_correction"}
+      ],
+      "gold": {"rows": [{"amount_inr": 2000, "pay_date": "2026-11-16", "mode": "UPI"}], "handoff_reason": null, "valid_promise": true}
+    }
+  ],
+  "negative_variants": [
+    {
+      "id": "mixed_yes_and_correction",
+      "description": "An affirmative followed by a new amount/date is a correction, not consent to the old proposal.",
+      "setup": [{"name": "offer", "transcript": "₹2,000 on 15 November 2026 by UPI.", "expect_rows": 0}],
+      "turns": [{"name": "mixed", "transcript": "haan, but make it ₹300 on 16 November 2026", "expect_rows": 0, "forbidden_speech": ["promise likh diya", "promise recorded"]}],
+      "gold": {"rows": []}
+    },
+    {
+      "id": "negated_yes",
+      "description": "A negated affirmative does not confirm the pending proposal.",
+      "setup": [{"name": "offer", "transcript": "₹2,000 on 15 November 2026 by UPI.", "expect_rows": 0}],
+      "turns": [{"name": "negated", "transcript": "haan nahi", "expect_rows": 0, "forbidden_speech": ["promise likh diya", "promise recorded"]}],
+      "gold": {"rows": []}
+    },
+    {
+      "id": "repeated_segment_id",
+      "description": "The same final segment replayed twice cannot create a second row or duplicate evidence.",
+      "setup": [{"name": "offer", "transcript": "₹2,000 on 15 November 2026 by UPI.", "expect_rows": 0}],
+      "turns": [
+        {"name": "first_yes", "transcript": "haan", "segment_id": "synthetic-segment-repeat-1", "expect_rows": 1},
+        {"name": "replayed_yes", "transcript": "haan", "segment_id": "synthetic-segment-repeat-1", "expect_rows": 1}
+      ],
+      "gold": {"rows": [{"amount_inr": 2000, "pay_date": "2026-11-15", "mode": "UPI"}]}
+    },
+    {
+      "id": "concurrent_open_promise_attempts",
+      "description": "Two confirmations on the same synthetic account race; at most one open promise may be saved.",
+      "sessions": ["primary", "secondary"],
+      "setup": [
+        {"name": "primary_offer", "session": "primary", "transcript": "₹2,000 on 15 November 2026 by UPI.", "expect_rows": 0},
+        {"name": "secondary_offer", "session": "secondary", "transcript": "₹1,800 on 16 November 2026 by cash.", "expect_rows": 0}
+      ],
+      "parallel_turns": [
+        {"name": "primary_yes", "session": "primary", "transcript": "haan"},
+        {"name": "secondary_yes", "session": "secondary", "transcript": "haan"}
+      ],
+      "gold": {"min_rows": 1, "max_rows": 1, "allowed_statuses": ["written", "open_promise_conflict"]}
+    },
+    {
+      "id": "injected_ledger_failure",
+      "description": "A failed guarded write returns a neutral response and persists no promise.",
+      "setup": [{"name": "offer", "transcript": "₹2,000 on 15 November 2026 by UPI.", "expect_rows": 0}],
+      "turns": [{"name": "failed_yes", "transcript": "haan", "stt_meta": {"inject_failure": true}, "expect_rows": 0, "expect_commit_status": "ledger_unavailable", "forbidden_speech": ["promise likh diya", "promise noted", "promise recorded"]}],
+      "gold": {"rows": []}
+    }
+  ]
+}

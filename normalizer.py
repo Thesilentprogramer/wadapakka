@@ -74,6 +74,12 @@ def _fold(text: str) -> str:
 def parse_amount_inr(text: str) -> tuple[float | None, str]:
     """Return (amount, note). None if we cannot parse a single amount."""
     raw = _fold(text)
+    # In a partial-payment utterance the amount following "only" is the
+    # offered payment; the outstanding balance is context, not a promise.
+    partial = re.search(r"\b(?:only|sirf|bas)\s+(?:₹\s*)?(\d[\d,]*(?:\.\d+)?)\b", text, re.I)
+    if partial:
+        return float(partial.group(1).replace(",", "")), "partial_payment"
+    raw = re.sub(r"\b\d{4}-\d{1,2}-\d{1,2}\b", " ", raw)
     raw = re.sub(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", " ", raw)
     raw = re.sub(r"\b\d{10}\b", " ", raw)
     # Find a contiguous number phrase. Unrelated dates, phone numbers and words
@@ -121,6 +127,22 @@ def parse_amount_inr(text: str) -> tuple[float | None, str]:
 def parse_relative_date(text: str, today: date | None = None) -> tuple[date | None, str]:
     today = today or date.today()
     raw = _fold(text)
+    m = re.search(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", raw)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))), "iso_date"
+        except ValueError:
+            return None, "invalid_numeric_date"
+    month_names = {"november": 11, "nov": 11, "नवंबर": 11, "नवम्बर": 11}
+    m = re.search(r"\b(\d{1,2}|pandrah|solah|पंद्रह|सोलह)\s+(november|nov|नवंबर|नवम्बर)\b", raw)
+    if m:
+        day = ONES.get(m.group(1), None)
+        if day is None:
+            day = int(m.group(1))
+        try:
+            return date(today.year, month_names[m.group(2)], day), "month_name"
+        except ValueError:
+            return None, "invalid_numeric_date"
     if re.search(r"\bparso\b|परसों|परसो", raw):
         return today + timedelta(days=2), "parso"
     if re.search(r"\baaj\b|आज|\btoday\b", raw):

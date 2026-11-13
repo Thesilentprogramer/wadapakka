@@ -50,3 +50,6 @@ Open http://127.0.0.1:8000. The demo has turn based and live streaming compariso
 ## Deploy
 
 The `Dockerfile` builds the React app and installs ffmpeg. `render.yaml` defines a free Render web service with `GNANI_API_KEY` entered during setup. Server state is in memory, so sessions, ledger rows, and handoffs reset on restart.
+## Reliability v2
+
+The synthetic demo now freezes each proposed amount, date, and payment mode before a full read-back and clear confirmation. A guarded SQLite Ledger allows one open promise per synthetic account across sessions; the naive comparison only shows what it *would* have written. Each saved promise links to transcript evidence with character offsets, and the audit compares heard, proposed, and saved values. `/api/eval/adversarial` replays eight isolated synthetic conversations; `/api/eval` remains a legacy parser fixture demonstration. Live Prisma/Timbre behavior is a separate optional smoke check, and the in-memory session and audit desk reset on restart.

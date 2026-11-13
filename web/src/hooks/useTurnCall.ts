@@ -30,6 +30,39 @@ export interface TurnSession {
   slots: Slots;
   pending?: string[];
   turns: TurnEvent[];
+  proposal?: PromiseProposal | null;
+  audit?: AuditRecord | null;
+  audit_status?: string;
+  [key: string]: unknown;
+}
+
+export interface PromiseProposal {
+  id?: string;
+  proposal_id?: string;
+  version?: number;
+  amount_inr?: number;
+  amount_paise?: number;
+  pay_date?: string;
+  mode?: string;
+  readback_text?: string;
+  readback_status?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+export interface AuditRecord {
+  audit_id?: string;
+  session_id?: string;
+  status?: string;
+  audit_status?: string;
+  discrepancy?: string | Record<string, unknown>;
+  field_diffs?: Array<Record<string, unknown>> | Record<string, unknown>;
+  reasons?: string[];
+  transcript_snippets?: string[] | Record<string, unknown>;
+  parsed_candidates?: Record<string, unknown> | unknown[];
+  proposal_snapshot?: PromiseProposal | null;
+  ledger_snapshot?: LedgerRow | null;
+  source_turn_ids?: Array<string | number>;
   [key: string]: unknown;
 }
 
@@ -40,15 +73,45 @@ export interface TurnResponse {
   event?: TurnEvent;
   verdict?: { slots?: Slots; [key: string]: unknown };
   handoff_brief?: string;
-  commit?: { written?: boolean; duplicate?: boolean; [key: string]: unknown };
+  proposal?: PromiseProposal | null;
+  proposal_id?: string;
+  commit_status?: string;
+  evidence_id?: string | null;
+  readback_status?: string;
+  audit_status?: string;
+  audit?: AuditRecord | null;
+  commit?: { written?: boolean; duplicate?: boolean; status?: string; row?: LedgerRow; promise?: LedgerRow; promise_id?: string; [key: string]: unknown };
+  ledger_row?: LedgerRow;
+  verified_commit?: boolean;
 }
 
 export interface LedgerRow {
+  promise_id?: string;
+  account_id?: string;
+  session_id?: string;
+  proposal_id?: string;
+  amount_inr?: number;
+  amount_paise?: number;
+  pay_date?: string;
+  mode?: string;
+  status?: string;
+  review_status?: string;
+  confirmation_source?: string;
+  source?: string;
+  confirmation_evidence_id?: string;
+  evidence_id?: string;
+  confirmed_at?: string;
+  created_at?: string;
+  commit_key?: string;
+  [key: string]: unknown;
+}
+
+export interface UnconfirmedProposal {
   session_id: string;
-  amount_inr: number;
-  pay_date: string;
-  mode: string;
-  commit_key: string;
+  account_id?: string;
+  proposal?: PromiseProposal | null;
+  audit_status?: string;
+  [key: string]: unknown;
 }
 
 export interface EvalResponse {
@@ -61,7 +124,66 @@ export interface EvalResponse {
   details?: Array<{ id: string; note: string; naive_correct: boolean; layer_correct: boolean }>;
 }
 
-export interface HandoffRow { session_id: string; reason: string; brief: string; transcript: string; logged_at: string }
+export interface AdversarialCheck {
+  passed?: boolean;
+  pass?: boolean;
+  ok?: boolean;
+  numerator?: number;
+  denominator?: number;
+  passed_count?: number;
+  total?: number;
+  detail?: string;
+  [key: string]: unknown;
+}
+
+export interface AdversarialCase {
+  id?: string;
+  case_id?: string;
+  persona?: string;
+  name?: string;
+  expected_state?: string;
+  observed_state?: string;
+  final_state?: string;
+  expected?: string | Record<string, unknown>;
+  observed?: string | Record<string, unknown>;
+  checks?: Record<string, boolean | AdversarialCheck>;
+  observed_transitions?: Array<string | Record<string, unknown>>;
+  transitions?: Array<string | Record<string, unknown>>;
+  row_count?: number;
+  errors?: string[];
+  failing_turn?: string | number;
+  failed_turn?: string | number;
+  turns?: Array<Record<string, unknown>>;
+  session_id?: string;
+  audit_id?: string;
+  [key: string]: unknown;
+}
+
+export interface AdversarialEvalResponse {
+  passed?: boolean | number;
+  cases?: AdversarialCase[];
+  personas?: AdversarialCase[];
+  results?: AdversarialCase[];
+  negative_variants?: Array<Record<string, unknown> | string> | Record<string, unknown>;
+  metrics?: Record<string, number | AdversarialCheck>;
+  aggregates?: Record<string, number | AdversarialCheck>;
+  [key: string]: unknown;
+}
+
+export interface HandoffRow {
+  session_id: string;
+  reason: string;
+  brief: string;
+  transcript?: string;
+  transcript_snippets?: string[];
+  logged_at: string;
+  unresolved_slot_candidates?: Record<string, unknown> | unknown[];
+  readback_status?: string;
+  audit_status?: string;
+  discrepancy?: string;
+  audit?: AuditRecord;
+  [key: string]: unknown;
+}
 
 type ComparisonResults = Partial<Record<Pipeline, TurnResponse>>;
 
@@ -90,10 +212,62 @@ function jsonInit(body: unknown): RequestInit {
   };
 }
 
+function proposalIdOf(response?: TurnResponse): string | undefined {
+  const proposal = response?.proposal || response?.session?.proposal;
+  const id = proposal?.id || proposal?.proposal_id || response?.proposal_id;
+  return typeof id === 'string' && id.length ? id : undefined;
+}
+
+function proposalOf(response?: TurnResponse): PromiseProposal | undefined {
+  return response?.proposal || response?.session?.proposal || undefined;
+}
+
+function commitStatusOf(response: TurnResponse): string {
+  return String(response.commit_status || response.commit?.status || '').toLowerCase();
+}
+
+function hasVerifiedLedgerRow(rows: LedgerRow[], response: TurnResponse, sessionId: string, proposalId: string): boolean {
+  const promiseId = response.commit?.promise_id
+    || response.commit?.row?.promise_id
+    || response.commit?.promise?.promise_id
+    || response.ledger_row?.promise_id;
+  const proposal = response.proposal || response.session?.proposal;
+  const amountInr = proposal?.amount_inr ?? (proposal?.amount_paise == null ? undefined : proposal.amount_paise / 100);
+  return rows.some((row) => {
+    if (promiseId && row.promise_id === promiseId) return true;
+    if (row.proposal_id === proposalId) return true;
+    if (row.session_id !== sessionId || amountInr === undefined) return false;
+    return Number(row.amount_inr ?? (row.amount_paise == null ? NaN : row.amount_paise / 100)) === Number(amountInr)
+      && row.pay_date === proposal?.pay_date
+      && String(row.mode || '').toLowerCase() === String(proposal?.mode || '').toLowerCase();
+  });
+}
+
+function auditFromResponse(data: unknown): AuditRecord | null {
+  if (!data || typeof data !== 'object') return null;
+  const value = data as Record<string, unknown>;
+  const candidate = (value.audit && typeof value.audit === 'object' ? value.audit : value) as AuditRecord;
+  return candidate.audit_id || candidate.session_id || candidate.status || candidate.audit_status ? candidate : null;
+}
+
+function readbackTargetOf(response?: TurnResponse): { sessionId: string; proposalId: string } | null {
+  if (!response?.session?.id) return null;
+  const proposal = response.proposal || response.session.proposal;
+  const id = proposalIdOf(response);
+  const decision = String(response.event?.decision || '').toLowerCase();
+  const readbackText = typeof proposal?.readback_text === 'string' ? proposal.readback_text : '';
+  const isReadback = decision.includes('readback') || decision.includes('read_back') || Boolean(readbackText && readbackText === response.prompt);
+  return isReadback && id ? { sessionId: response.session.id, proposalId: id } : null;
+}
+
 export function useTurnCall(active = true) {
   const [results, setResults] = useState<ComparisonResults>({});
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  const [unconfirmedProposals, setUnconfirmedProposals] = useState<UnconfirmedProposal[]>([]);
   const [ledgerError, setLedgerError] = useState('');
+  const [audits, setAudits] = useState<AuditRecord[]>([]);
+  const [sessionAudits, setSessionAudits] = useState<Record<string, AuditRecord>>({});
+  const [auditError, setAuditError] = useState('');
   const [handoffs, setHandoffs] = useState<HandoffRow[]>([]);
   const [handoffError, setHandoffError] = useState('');
   const [evalError, setEvalError] = useState('');
@@ -102,6 +276,9 @@ export function useTurnCall(active = true) {
   const [recording, setRecording] = useState(false);
   const [evalResult, setEvalResult] = useState<EvalResponse | null>(null);
   const [evalBusy, setEvalBusy] = useState(false);
+  const [adversarialResult, setAdversarialResult] = useState<AdversarialEvalResponse | null>(null);
+  const [adversarialBusy, setAdversarialBusy] = useState(false);
+  const [adversarialError, setAdversarialError] = useState('');
   const [playbackState, setPlaybackState] = useState<'idle' | 'playing' | 'paused' | 'ended'>('idle');
   const [playbackTime, setPlaybackTime] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
@@ -113,6 +290,7 @@ export function useTurnCall(active = true) {
   const partsRef = useRef<BlobPart[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const readbackTargetRef = useRef<{ sessionId: string; proposalId: string } | null>(null);
   const mountedRef = useRef(true);
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -141,16 +319,79 @@ export function useTurnCall(active = true) {
     });
   }, []);
 
-  const refreshLedger = useCallback(async () => {
-    if (!mountedRef.current) return;
+  const reportReadbackComplete = useCallback(async (target: { sessionId: string; proposalId: string }) => {
     try {
-      const data = await requestJson<{ rows: LedgerRow[] }>('/api/ledger');
-      if (!mountedRef.current) return;
-      setLedger(data.rows);
+      const data = await requestJson<Partial<TurnResponse> & { session?: Partial<TurnSession> }>(
+        '/api/readback/complete',
+        jsonInit({ session_id: target.sessionId, proposal_id: target.proposalId }),
+      );
+      const current = resultsRef.current.layer;
+      if (!mountedRef.current || current?.session.id !== target.sessionId || proposalIdOf(current) !== target.proposalId) return;
+      const returnedProposal = data.proposal || data.session?.proposal;
+      const currentProposal = proposalOf(current);
+      const proposal = returnedProposal || (currentProposal
+        ? { ...currentProposal, readback_status: data.readback_status || 'complete' }
+        : currentProposal);
+      const updated: TurnResponse = {
+        ...current,
+        ...data,
+        session: { ...current.session, ...(data.session || {}), proposal: proposal || current.session.proposal },
+        proposal: proposal || current.proposal,
+        readback_status: data.readback_status || proposal?.readback_status || 'complete',
+      };
+      setComparisonResults((previous) => ({ ...previous, layer: updated }));
+      setStatus('Full read back playback was acknowledged by the server. Confirmation remains a separate typed demo action.');
+    } catch (error) {
+      if (mountedRef.current) setStatus(`Read back audio ended, but the server could not record playback completion: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [setComparisonResults]);
+
+  const refreshLedger = useCallback(async () => {
+    if (!mountedRef.current) return null;
+    try {
+      const data = await requestJson<{ rows?: LedgerRow[]; unconfirmed?: UnconfirmedProposal[] }>('/api/ledger');
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      if (!mountedRef.current) return rows;
+      setLedger(rows);
+      setUnconfirmedProposals(Array.isArray(data.unconfirmed) ? data.unconfirmed : []);
       setLedgerError('');
+      return rows;
     } catch (error) {
       if (mountedRef.current) setLedgerError(error instanceof Error ? error.message : 'Could not load the promise ledger.');
+      return null;
     }
+  }, []);
+
+  const refreshAudits = useCallback(async (sessionIds: string[] = []) => {
+    let failed = false;
+    let loadedAny = false;
+    try {
+      const data = await requestJson<{ rows?: AuditRecord[]; audits?: AuditRecord[]; records?: AuditRecord[] }>('/api/audits');
+      const rows = data.audits || data.rows || data.records || [];
+      if (mountedRef.current) setAudits(Array.isArray(rows) ? rows : []);
+      loadedAny = true;
+    } catch {
+      failed = true;
+    }
+
+    const uniqueIds = [...new Set(sessionIds.filter(Boolean))];
+    if (uniqueIds.length) {
+      const settled = await Promise.all(uniqueIds.map(async (sessionId) => {
+        try {
+          const data = await requestJson<unknown>(`/api/session/${encodeURIComponent(sessionId)}/audit`);
+          return [sessionId, auditFromResponse(data)] as const;
+        } catch {
+          return [sessionId, null] as const;
+        }
+      }));
+      const found = settled.filter((entry): entry is readonly [string, AuditRecord] => Boolean(entry[1]));
+      if (mountedRef.current && found.length) {
+        setSessionAudits((previous) => ({ ...previous, ...Object.fromEntries(found) }));
+        loadedAny = true;
+      }
+      if (found.length !== uniqueIds.length) failed = true;
+    }
+    if (mountedRef.current) setAuditError(failed && !loadedAny ? 'Audit records are unavailable.' : '');
   }, []);
 
   const refreshHandoffs = useCallback(async () => {
@@ -162,8 +403,9 @@ export function useTurnCall(active = true) {
     }
   }, []);
 
-  const speak = useCallback(async (text?: string) => {
+  const speak = useCallback(async (text?: string, readbackTarget: { sessionId: string; proposalId: string } | null = null) => {
     if (!text || !mountedRef.current || !activeRef.current) return;
+    readbackTargetRef.current = readbackTarget;
     try {
       audioRef.current?.pause();
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
@@ -191,6 +433,8 @@ export function useTurnCall(active = true) {
         if (!mountedRef.current) return;
         setPlaybackState('ended');
         setPlaybackTime(audio.duration || 0);
+        const target = readbackTargetRef.current;
+        if (audioRef.current === audio && target) void reportReadbackComplete(target);
       };
       await audio.play();
       if (!mountedRef.current || !activeRef.current) audio.pause();
@@ -200,7 +444,7 @@ export function useTurnCall(active = true) {
         setStatus('Voice unavailable; read back is shown as text.');
       }
     }
-  }, []);
+  }, [reportReadbackComplete]);
 
   const toggleReadback = useCallback(async (text?: string) => {
     if (!mountedRef.current || !activeRef.current) return;
@@ -254,13 +498,14 @@ export function useTurnCall(active = true) {
       setComparisonResults({ naive, layer });
       setStatus('Both pipelines are ready. Send a borrower turn.');
       void refreshLedger();
+      void refreshAudits([layer.session.id]);
       void speak(layer.prompt);
     } catch (error) {
       if (mountedRef.current) setStatus(`Could not start the comparison: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       if (mountedRef.current) setBusy(false);
     }
-  }, [refreshLedger, setComparisonResults, speak]);
+  }, [refreshAudits, refreshLedger, setComparisonResults, speak]);
 
   const processTurn = useCallback(async (submit: (pipeline: Pipeline, sessionId: string) => Promise<TurnResponse>, modeLabel: string) => {
     const ids = idsRef.current;
@@ -284,14 +529,15 @@ export function useTurnCall(active = true) {
       setStatus(modeLabel.startsWith('Transcribing') ? 'Audio turn processed.' : 'Turn processed.');
       await refreshLedger();
       await refreshHandoffs();
+      await refreshAudits([ids.layer!]);
       const layerResult = responses.find(({ pipeline }) => pipeline === 'layer')?.response;
-      if (layerResult?.prompt) await speak(layerResult.prompt);
+      if (layerResult?.prompt) await speak(layerResult.prompt, readbackTargetOf(layerResult));
     } catch (error) {
       if (mountedRef.current) setStatus(`Turn failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       if (mountedRef.current) setBusy(false);
     }
-  }, [applyResponse, refreshLedger, refreshHandoffs, speak]);
+  }, [applyResponse, refreshAudits, refreshLedger, refreshHandoffs, speak]);
 
   const submitText = useCallback(async (transcript: string) => {
     if (!transcript.trim() || !idsRef.current.layer || !mountedRef.current || !activeRef.current) return;
@@ -356,21 +602,46 @@ export function useTurnCall(active = true) {
   const confirm = useCallback(async (accepted: boolean) => {
     const sessionId = idsRef.current.layer;
     if (!sessionId || !mountedRef.current || !activeRef.current) return;
+    const proposalId = proposalIdOf(resultsRef.current.layer);
+    if (!proposalId) {
+      setStatus('Cannot confirm: the current proposal ID is missing. Send a fresh borrower turn.');
+      return;
+    }
     setBusy(true);
     setStatus(accepted ? 'Confirming the read back…' : 'Requesting a correction…');
     try {
-      const response = await requestJson<TurnResponse>('/api/confirm', jsonInit({ session_id: sessionId, accepted }));
+      const response = await requestJson<TurnResponse>('/api/confirm', jsonInit({ session_id: sessionId, accepted, proposal_id: proposalId }));
       if (!mountedRef.current) return;
       applyResponse('layer', response);
-      await refreshLedger();
-      setStatus(accepted ? 'Promise confirmed and written to the ledger.' : 'Correction requested. Say the corrected amount, date, and payment method.');
-      if (response.prompt) await speak(response.prompt);
+      const rows = await refreshLedger();
+      await refreshAudits([sessionId]);
+      if (!accepted) {
+        setStatus('Correction requested. Say the corrected amount, date, and payment method.');
+      } else {
+        const commitStatus = commitStatusOf(response);
+        const statusAllowsSuccess = ['committed', 'written', 'duplicate', 'verified', 'success'].includes(commitStatus);
+        const verified = response.verified_commit === true
+          || Boolean(response.commit?.row || response.commit?.promise || response.ledger_row)
+          || Boolean(rows && hasVerifiedLedgerRow(rows, response, sessionId, proposalId));
+        if (statusAllowsSuccess && verified) {
+          setStatus(commitStatus === 'duplicate'
+            ? 'This proposal was already recorded. The existing Ledger row is verified.'
+            : 'Confirmed promise verified in the guarded Ledger.');
+        } else if (commitStatus.includes('conflict')) {
+          setStatus('This proposal conflicts with an open promise. No new Ledger row was written.');
+        } else if (commitStatus.includes('fail') || commitStatus === 'ledger_unavailable') {
+          setStatus('The Ledger write failed. No promise was confirmed; retry or hand off for review.');
+        } else {
+          setStatus('Confirmation received, but no verified Ledger row is available. No success is shown.');
+        }
+      }
+      if (response.prompt) await speak(response.prompt, readbackTargetOf(response));
     } catch (error) {
       if (mountedRef.current) setStatus(`Could not submit confirmation: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       if (mountedRef.current) setBusy(false);
     }
-  }, [applyResponse, refreshLedger, speak]);
+  }, [applyResponse, refreshAudits, refreshLedger, speak]);
 
   const runEval = useCallback(async () => {
     if (!mountedRef.current || !activeRef.current) return;
@@ -389,14 +660,35 @@ export function useTurnCall(active = true) {
     }
   }, []);
 
+  const runAdversarialEval = useCallback(async () => {
+    if (!mountedRef.current || !activeRef.current) return;
+    setAdversarialBusy(true);
+    setAdversarialError('');
+    setStatus('Running isolated adversarial conversations…');
+    try {
+      const result = await requestJson<AdversarialEvalResponse>('/api/eval/adversarial');
+      if (!mountedRef.current) return;
+      setAdversarialResult(result);
+      setStatus('Adversarial conversation evaluation complete.');
+      await refreshLedger();
+      await refreshAudits();
+    } catch (error) {
+      if (mountedRef.current) setAdversarialError(error instanceof Error ? error.message : 'Unknown error');
+    } finally {
+      if (mountedRef.current) setAdversarialBusy(false);
+    }
+  }, [refreshAudits, refreshLedger]);
+
   const canTurn = active && Boolean(idsRef.current.layer) && !TERMINAL_STATES.has(results.layer?.session.state || '');
-  const canConfirm = results.layer?.session.state === 'CONFIRMING';
+  const canConfirm = ['CONFIRMING', 'AWAITING_CONFIRMATION'].includes(results.layer?.session.state || '')
+    && Boolean(proposalIdOf(results.layer));
   const prompt = results.layer?.prompt || '';
 
   useEffect(() => {
     mountedRef.current = true;
     void refreshLedger();
     void refreshHandoffs();
+    void refreshAudits();
     return () => {
       mountedRef.current = false;
       cancelRecording();
@@ -410,7 +702,7 @@ export function useTurnCall(active = true) {
       audioRef.current?.pause();
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     };
-  }, [cancelRecording, refreshLedger, refreshHandoffs]);
+  }, [cancelRecording, refreshAudits, refreshLedger, refreshHandoffs]);
 
   useEffect(() => {
     activeRef.current = active;
@@ -423,8 +715,13 @@ export function useTurnCall(active = true) {
   return {
     results,
     ledger,
+    unconfirmedProposals,
     ledgerError,
     refreshLedger,
+    audits,
+    sessionAudits,
+    auditError,
+    refreshAudits,
     handoffs,
     handoffError,
     refreshHandoffs,
@@ -434,6 +731,9 @@ export function useTurnCall(active = true) {
     evalBusy,
     evalResult,
     evalError,
+    adversarialResult,
+    adversarialBusy,
+    adversarialError,
     playbackState,
     playbackTime,
     playbackDuration,
@@ -448,5 +748,6 @@ export function useTurnCall(active = true) {
     toggleReadback,
     seekReadback,
     runEval,
+    runAdversarialEval,
   };
 }

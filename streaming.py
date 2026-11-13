@@ -125,10 +125,14 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
         if session["turns"]:
             session["turns"][-1]["agent_interrupted"] = True
         # A half-heard read back can never authorize a confirmation.
-        if gate.awaiting and session["state"] == State.CONFIRMING.value:
+        if gate.awaiting and session["state"] in {State.CONFIRMING.value, State.READBACK_PENDING.value, State.AWAITING_CONFIRMATION.value}:
             session["state"] = State.CLARIFY.value
+            if session.get("proposal"):
+                session["proposal"]["readback_status"] = "interrupted"
+            session["active_proposal_id"] = None
         origin = speech_start if source == "prisma_speech_start" else local_speech_at
         await send({"type": "interrupted", "turn_id": interrupted, "source": source,
+                    "proposal_id": session.get("proposal", {}).get("id") if session.get("proposal") else None,
                     "reaction_ms": round((time.perf_counter() - origin) * 1000) if origin else None,
                     "session": session})
 
@@ -141,6 +145,7 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
         await send({"type": "agent_start", "turn_id": turn_id, "text": prompt,
                     "sample_rate": 16000})
         delivered = False
+        completed = False
         try:
             async with websockets.connect(TTS_URL, additional_headers={"X-API-Key-ID": key}, ssl=TLS, open_timeout=10) as upstream:
                 await upstream.send(json.dumps(payload))
@@ -156,6 +161,7 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                             await send({"type": "agent_audio", "turn_id": turn_id, "audio": audio})
                             delivered = True
                     elif message.get("type") == "complete":
+                        completed = True
                         break
                     elif message.get("type") == "error":
                         raise RuntimeError("Timbre streaming error")
@@ -172,6 +178,9 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                 import io, wave
                 with wave.open(io.BytesIO(audio), "rb") as wav:
                     pcm = wav.readframes(wav.getnframes())
+                if not pcm:
+                    await send({"type": "error", "message": "Timbre returned empty read-back audio"})
+                    return
                 if first_audio is None:
                     first_audio = time.perf_counter()
                     await send({"type": "tts_first_byte", "turn_id": turn_id,
@@ -179,8 +188,14 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                 for offset in range(0, len(pcm), 8192):
                     await send({"type": "agent_audio", "turn_id": turn_id,
                                 "audio": base64.b64encode(pcm[offset:offset + 8192]).decode()})
-        gate.generated_audio(turn_id)
-        await send({"type": "agent_done", "turn_id": turn_id})
+                delivered = True
+                completed = True
+        if completed and delivered:
+            gate.generated_audio(turn_id)
+            await send({"type": "agent_done", "turn_id": turn_id})
+        else:
+            await send({"type": "error", "message": "Read-back audio was incomplete",
+                        "turn_id": turn_id, "proposal_id": session.get("active_proposal_id")})
 
     headers = {"X-API-Key-ID": key, "language_code": "hi-IN", "model": "prisma-v3.0",
                "format": "transcribe", "x-sample-rate": "16000", "x-vad-threshold": "0.55",
@@ -216,9 +231,13 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                         speech_end = time.perf_counter()
                     elif control.get("type") == "playback_done":
                         if gate.complete(control.get("turn_id")):
+                            if gate.awaiting and session.get("proposal") and session["state"] == State.READBACK_PENDING.value:
+                                session["proposal"]["readback_status"] = "complete"
+                                session["state"] = State.AWAITING_CONFIRMATION.value
                             active_turn = None
                             tts_task = None
-                            await send({"type": "playback_ack", "turn_id": gate.turn_id})
+                            await send({"type": "playback_ack", "turn_id": gate.turn_id,
+                                        "proposal_id": session.get("active_proposal_id")})
                     elif control.get("type") == "stop":
                         return
 
@@ -260,15 +279,10 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                         if not event.get("is_final", True) or not allowed or session["state"] in {"HANDOFF", "REFUSED", "WRITTEN"}:
                             continue
                         confirmed_speech = False
-                        if text_is_confirmation(text) and session["state"] == "CLARIFY" and gate.awaiting and gate.interrupted:
-                            reply = {"session": session, "transcript": text, "prompt": "Pehle poora read back suniye. Maine note kiya: " + ", ".join(str(session["slots"].get(k)) for k in ("amount_inr", "pay_date", "mode")) + ". Kya yeh sahi hai?",
-                                     "event": {"decision": "readback_repeated"}}
-                            session["state"] = "CONFIRMING"
-                        elif text_is_confirmation(text) and session["state"] == "CONFIRMING" and not gate.can_confirm():
-                            reply = {"session": session, "transcript": text, "prompt": "Kripya poora read back suniye, phir haan boliye.",
-                                     "event": {"decision": "confirmation_waiting_for_readback"}}
-                        else:
-                            reply = _handle_turn(session_id, text, "layer", None, {"source": "stream", "segment_id": segment}, metrics["end_to_final_ms"] or 0)
+                        reply = _handle_turn(session_id, text, "layer", None,
+                                             {"source": "stream", "segment_id": segment,
+                                              "readback_complete": gate.can_confirm()},
+                                             metrics["end_to_final_ms"] or 0)
                         reply["metrics"] = metrics
                         await send({"type": "turn", **reply})
                         if reply.get("handoff_brief") or detect_handoff(text)["handoff"]:
@@ -296,6 +310,8 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
         with suppress(Exception):
             await send({"type": "error", "message": "Streaming connection failed"})
     finally:
+        from app import end_session
+        end_session(session_id)
         if tts_task and not tts_task.done():
             tts_task.cancel()
         with suppress(Exception):

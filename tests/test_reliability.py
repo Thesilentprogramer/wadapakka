@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from app import app
 from handoff import brief, detect_handoff
 from idempotency import Ledger
+from promise_guard import freeze_proposal
 from normalizer import parse_amount_inr, parse_relative_date, parse_mode
 from verifier import assess
 
@@ -33,9 +34,14 @@ def test_verifier_requires_all_slots_and_readback():
 
 
 def test_ledger_retry_is_idempotent():
-    ledger = Ledger()
-    first = ledger.commit('session', 2500, '2026-11-12', 'UPI')
-    second = ledger.commit('session', 2500, '2026-11-12', 'UPI')
+    ledger = Ledger(':memory:')
+    proposal = freeze_proposal(proposal_id='proposal-1', version=1, session_id='session',
+                               account_id='synthetic-test', amount_inr=2500,
+                               pay_date='2026-11-12', mode='UPI', readback_text='2500, 2026-11-12, UPI',
+                               readback_status='ui_acknowledged')
+    confirmation = {'proposal_id': 'proposal-1', 'transcript': 'haan', 'source': 'ui', 'accepted': True}
+    first = ledger.commit_confirmed_promise(proposal, confirmation)
+    second = ledger.commit_confirmed_promise(proposal, confirmation)
     assert first['written'] and second['duplicate']
     assert len(ledger.rows) == 1
 
@@ -65,8 +71,9 @@ def test_confirmed_write_and_handoff_stop():
     turn = client.post('/api/turn-text', json={'session_id': sid, 'transcript': 'dhai hazaar parso UPI se'}).json()
     assert turn['session']['state'] == 'CONFIRMING'
     assert client.get('/api/ledger').json()['rows'] == []
-    assert client.post('/api/confirm', json={'session_id': sid, 'accepted': True}).json()['commit']['written']
-    assert client.post('/api/confirm', json={'session_id': sid, 'accepted': True}).json()['commit']['duplicate']
+    proposal_id = turn['session']['proposal']['id']
+    assert client.post('/api/confirm', json={'session_id': sid, 'proposal_id': proposal_id, 'accepted': True}).json()['commit']['written']
+    assert client.post('/api/confirm', json={'session_id': sid, 'proposal_id': proposal_id, 'accepted': True}).json()['commit']['duplicate']
     sid2 = client.post('/api/session').json()['session']['id']
     handoff = client.post('/api/turn-text', json={'session_id': sid2, 'transcript': 'insaan se baat karao'}).json()
     assert handoff['session']['state'] == 'HANDOFF'

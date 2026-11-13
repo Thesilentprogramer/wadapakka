@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { LedgerRow, PromiseProposal } from './useTurnCall';
 
 export type PipelineKind = 'naive' | 'layer';
 
@@ -6,12 +7,24 @@ export type PipelineResult = {
   transcript?: string;
   prompt?: string;
   handoff_brief?: string;
+  proposal?: PromiseProposal | null;
+  proposal_id?: string;
+  commit_status?: string;
+  evidence_id?: string | null;
+  audit_status?: string;
+  readback_status?: string;
+  commit?: { promise_id?: string; status?: string; row?: LedgerRow; promise?: LedgerRow; [key: string]: unknown };
+  ledger_row?: LedgerRow;
+  verified_commit?: boolean;
+  commit_verification_error?: string;
   session?: {
     id?: string;
     state?: string;
     slots?: Record<string, string | number | null | undefined>;
+    proposal?: PromiseProposal | null;
+    audit_status?: string;
   };
-  event?: { decision?: string };
+  event?: { decision?: string; [key: string]: unknown };
   [key: string]: unknown;
 };
 
@@ -54,6 +67,32 @@ declare global {
 
 const emptyStats: LiveStats = { final: null, audio: null, barge: null };
 const terminalStates = new Set(['WRITTEN', 'HANDOFF', 'REFUSED']);
+
+function currentProposalId(result?: PipelineResult): string | undefined {
+  const proposal = result?.proposal || result?.session?.proposal;
+  const id = proposal?.id || proposal?.proposal_id || result?.proposal_id;
+  return typeof id === 'string' && id ? id : undefined;
+}
+
+function isPositiveCommitStatus(result: PipelineResult) {
+  return ['committed', 'written', 'duplicate', 'verified', 'success'].includes(String(result.commit_status || result.commit?.status || '').toLowerCase());
+}
+
+function ledgerVerifies(result: PipelineResult, rows: LedgerRow[]) {
+  const sessionId = result.session?.id;
+  const proposalId = currentProposalId(result);
+  const proposal = result.proposal || result.session?.proposal;
+  const promiseId = result.commit?.promise_id || result.commit?.row?.promise_id || result.commit?.promise?.promise_id || result.ledger_row?.promise_id;
+  const amountInr = proposal?.amount_inr ?? (proposal?.amount_paise === undefined ? undefined : proposal.amount_paise / 100);
+  return rows.some((row) => {
+    if (promiseId && row.promise_id === promiseId) return true;
+    if (proposalId && row.proposal_id === proposalId) return true;
+    if (!sessionId || row.session_id !== sessionId || amountInr === undefined) return false;
+    return Number(row.amount_inr ?? (row.amount_paise === undefined ? NaN : row.amount_paise / 100)) === Number(amountInr)
+      && row.pay_date === proposal?.pay_date
+      && String(row.mode || '').toLowerCase() === String(proposal?.mode || '').toLowerCase();
+  });
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -151,6 +190,35 @@ export function useLiveCall({ onPipelineUpdate }: LiveCallOptions = {}) {
     onPipelineUpdateRef.current?.(kind, data);
   }, []);
 
+  const verifyGuardedCommit = useCallback(async (result: PipelineResult) => {
+    if (!isPositiveCommitStatus(result) || !result.session?.id) return;
+    const sessionId = result.session.id;
+    const proposalId = currentProposalId(result);
+    try {
+      const data = await api<{ rows?: LedgerRow[] }>('/api/ledger');
+      const verified = ledgerVerifies(result, Array.isArray(data.rows) ? data.rows : []);
+      const latest = resultsRef.current.layer;
+      if (!latest || latest.session?.id !== sessionId || (proposalId && currentProposalId(latest) !== proposalId)) return;
+      updatePipeline('layer', { ...latest, verified_commit: verified, commit_verification_error: undefined });
+      if (verified) {
+        const status = String(latest.commit_status || latest.commit?.status || '').toLowerCase();
+        setStatus(status === 'duplicate' ? 'An existing guarded Ledger row was verified.' : 'Confirmed promise verified in the guarded Ledger.');
+        setCallState('Confirmed');
+      } else {
+        addTimeline('Commit not verified', 'The session reports a commit status, but no matching guarded Ledger row was returned.', 'error');
+      }
+    } catch (error) {
+      const latest = resultsRef.current.layer;
+      if (latest?.session?.id !== sessionId || (proposalId && currentProposalId(latest) !== proposalId)) return;
+      updatePipeline('layer', {
+        ...latest,
+        verified_commit: false,
+        commit_verification_error: error instanceof Error ? error.message : String(error),
+      });
+      addTimeline('Ledger verification unavailable', error instanceof Error ? error.message : String(error), 'error');
+    }
+  }, [addTimeline, updatePipeline]);
+
   const pushStat = useCallback((kind: StatKind, value: unknown) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) return;
     statSamplesRef.current[kind].push(value);
@@ -188,7 +256,7 @@ export function useLiveCall({ onPipelineUpdate }: LiveCallOptions = {}) {
     if (!doneFromServerRef.current || id !== turnIdRef.current || scheduledRef.current.length) return;
     const socket = socketRef.current;
     if (!bargeSentRef.current && socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'playback_done', turn_id: id }));
+      socket.send(JSON.stringify({ type: 'playback_done', turn_id: id, proposal_id: currentProposalId(resultsRef.current.layer) }));
     }
     turnIdRef.current = null;
     doneFromServerRef.current = false;
@@ -197,10 +265,15 @@ export function useLiveCall({ onPipelineUpdate }: LiveCallOptions = {}) {
     const gain = playbackGainRef.current;
     if (context && gain) gain.gain.setTargetAtTime(1, context.currentTime, 0.02);
 
-    const sessionState = resultsRef.current.layer?.session?.state;
-    if (sessionState === 'WRITTEN') {
-      setStatus('Confirmed promise written.');
+    const layerResult = resultsRef.current.layer;
+    const sessionState = layerResult?.session?.state;
+    if (sessionState === 'WRITTEN' && layerResult?.verified_commit === true) {
+      const commitStatus = String(layerResult.commit_status || layerResult.commit?.status || '').toLowerCase();
+      setStatus(commitStatus === 'duplicate' ? 'An existing guarded Ledger row was verified.' : 'Confirmed promise verified in the guarded Ledger.');
       setCallState('Confirmed');
+    } else if (sessionState === 'WRITTEN') {
+      setStatus('Session reports a commit, but the matching Ledger row is not verified yet.');
+      setCallState('Verifying commit');
     } else if (sessionState === 'HANDOFF') {
       setStatus('Human handoff.');
       setCallState('Handoff');
@@ -221,7 +294,7 @@ export function useLiveCall({ onPipelineUpdate }: LiveCallOptions = {}) {
     bargeSentRef.current = true;
     const socket = socketRef.current;
     if (source === 'local_sustained' && socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'barge_in', source, sustained_ms: sustainedMs }));
+      socket.send(JSON.stringify({ type: 'barge_in', source, sustained_ms: sustainedMs, proposal_id: currentProposalId(resultsRef.current.layer) }));
     }
     const reaction = Math.round(performance.now() - started);
     markAgentInterrupted(turnId);
@@ -323,7 +396,7 @@ export function useLiveCall({ onPipelineUpdate }: LiveCallOptions = {}) {
       if (current.handoff_brief) setHandoffBrief(current.handoff_brief);
 
       const state = current.session?.state;
-      if (state === 'WRITTEN') setStatus('Confirmed promise written.');
+      if (state === 'WRITTEN' || isPositiveCommitStatus(current)) void verifyGuardedCommit(current);
 
       const transcript = current.transcript;
       const naiveId = sessionIdsRef.current.naive;
@@ -352,6 +425,20 @@ export function useLiveCall({ onPipelineUpdate }: LiveCallOptions = {}) {
         doneFromServerRef.current = true;
         checkDone(message.turn_id);
       }
+    } else if (message.type === 'playback_ack') {
+      const current = resultsRef.current.layer;
+      const expectedProposalId = currentProposalId(current);
+      if (current && (!message.proposal_id || message.proposal_id === expectedProposalId)) {
+        const proposal = current.proposal || current.session?.proposal;
+        const completedProposal = proposal ? { ...proposal, readback_status: 'complete' } : proposal;
+        updatePipeline('layer', {
+          ...current,
+          readback_status: 'complete',
+          proposal: completedProposal,
+          session: { ...current.session, state: 'AWAITING_CONFIRMATION', proposal: completedProposal },
+        });
+        addTimeline('Read back completed', 'Server acknowledged playback for the active proposal. Spoken confirmation can now be checked.', 'turn');
+      }
     } else if (message.type === 'tts_first_byte') {
       if (message.end_to_audio_ms != null) pushStat('audio', message.end_to_audio_ms);
       addTimeline('First TTS audio byte', `${message.end_to_audio_ms ?? '—'} ms from speech end`);
@@ -362,6 +449,15 @@ export function useLiveCall({ onPipelineUpdate }: LiveCallOptions = {}) {
       if (message.reaction_ms != null) pushStat('barge', message.reaction_ms);
       const origin = message.source === 'prisma_speech_start' ? 'Prisma speech_start' : 'local sustained detection';
       addTimeline('Server cancelled TTS', `${message.source} · ${message.reaction_ms != null ? `${message.reaction_ms} ms from ${origin}` : 'reaction unavailable'}`, 'interrupted');
+      if (message.session) {
+        const current = resultsRef.current.layer;
+        if (current) updatePipeline('layer', {
+          ...current,
+          session: message.session,
+          proposal: message.session.proposal || current.proposal,
+          readback_status: message.session.proposal?.readback_status || 'interrupted',
+        });
+      }
       setCallState('Listening');
     } else if (message.type === 'handoff') {
       stopPlayback();
@@ -376,7 +472,7 @@ export function useLiveCall({ onPipelineUpdate }: LiveCallOptions = {}) {
       setStatus(message.message || 'Streaming error');
       setCallState('Connection issue');
     }
-  }, [addTimeline, barge, checkDone, markAgentInterrupted, playChunk, pushStat, stopPlayback, updatePipeline]);
+  }, [addTimeline, barge, checkDone, markAgentInterrupted, playChunk, pushStat, stopPlayback, updatePipeline, verifyGuardedCommit]);
 
   const closeCall = useCallback((updateUI = true) => {
     generationRef.current++;
