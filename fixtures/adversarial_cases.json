@@ -122,5 +122,9 @@
       "turns": [{"name": "failed_yes", "transcript": "haan", "stt_meta": {"inject_failure": true}, "expect_rows": 0, "expect_commit_status": "ledger_unavailable", "forbidden_speech": ["promise likh diya", "promise noted", "promise recorded"]}],
       "gold": {"rows": []}
     }
+  ],
+  "followup_cases": [
+    {"id": "followup_kept", "persona": "Kept promise", "initial_offer": "₹3,000 on 15 November 2026 by UPI", "payment": {"amount_paise": 300000, "paid_at": "2026-11-15"}, "followup_utterance": "haan, maine pay kiya", "expected_outcome": "kept", "expected_rows": 1},
+    {"id": "followup_quiet_amount_change", "persona": "Quiet amount change", "initial_offer": "₹3,000 on 15 November 2026 by UPI", "followup_offer": "₹2,000 on 16 November 2026 by UPI", "followup_utterance": "haan, lekin 500", "expected_outcome": "OPEN", "expected_rows": 1}
   ]
 }

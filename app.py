@@ -111,20 +111,30 @@ def index() -> FileResponse:
     return FileResponse((WEB_DIST if WEB_DIST.is_dir() else STATIC) / "index.html")
 
 
-@app.post("/api/session")
-def create_session() -> dict[str, Any]:
-    session = _new_session()
-    greeting = (
+def _greeting(store: Ledger, account_id: str) -> str:
+    prior = store.latest_promise(account_id)
+    if prior:
+        due = date.fromisoformat(prior["pay_date"])
+        amount = f"{prior['amount_paise'] / 100:,.2f}".rstrip("0").rstrip(".")
+        return f"Namaste Ravi ji, pichhli baar aapne {due.day} {due.strftime('%b')} tak ₹{amount} dene ka wada kiya tha. Aaj aap is baare mein kya kehna chahenge?"
+    return (
         "Namaste, main WadaPakka bol rahi hoon. "
         "Aapka outstanding 2500 rupaye hai. "
         "Aap kab, kitna, aur kaise bharenge?"
     )
-    return {"session": session, "prompt": greeting}
+
+
+@app.post("/api/session")
+def create_session() -> dict[str, Any]:
+    session = _new_session(ledger_store=ledger)
+    return {"session": session, "prompt": session["opening_prompt"]}
 
 
 def _new_session(sessions_store: dict[str, dict[str, Any]] | None = None,
-                 today: date | None = None) -> dict[str, Any]:
+                 today: date | None = None, ledger_store: Ledger | None = None) -> dict[str, Any]:
     sessions_store = sessions if sessions_store is None else sessions_store
+    ledger_store = ledger if ledger_store is None else ledger_store
+    ledger_store.evaluate_outcomes(SYNTHETIC_ACCOUNT_ID)
     sid = str(uuid.uuid4())
     sessions_store[sid] = {
         "id": sid,
@@ -141,6 +151,8 @@ def _new_session(sessions_store: dict[str, dict[str, Any]] | None = None,
         "pending": [],
         "turns": [],
         "created_at": _now(),
+        "opening_prompt": _greeting(ledger_store, SYNTHETIC_ACCOUNT_ID),
+        "remembered_promise": ledger_store.latest_promise(SYNTHETIC_ACCOUNT_ID),
         "account": {
             "name": "Ravi Kumar",
             "outstanding_inr": 2500,
@@ -148,6 +160,7 @@ def _new_session(sessions_store: dict[str, dict[str, Any]] | None = None,
         },
     }
     _move(sessions_store[sid], State.COLLECTING)
+    sessions_store[sid]["dialogue"] = [{"speaker": "agent", "text": sessions_store[sid]["opening_prompt"], "timestamp": _now()}]
     return sessions_store[sid]
 
 
@@ -222,8 +235,28 @@ def _handle_turn(
     ledger_store: Ledger | None = None, record_global: bool = True,
 ) -> dict[str, Any]:
     with session_lock:
-        return _handle_turn_inner(session_id, transcript, mode, verbatim, stt_meta,
+        result = _handle_turn_inner(session_id, transcript, mode, verbatim, stt_meta,
                                   latency_ms, sessions_store, ledger_store, record_global)
+        active_sessions = sessions if sessions_store is None else sessions_store
+        store = ledger if ledger_store is None else ledger_store
+        session = active_sessions[session_id]
+        dialogue = session.setdefault("dialogue", [])
+        dialogue.append({"speaker": "borrower", "text": transcript, "timestamp": _now()})
+        if result.get("prompt"):
+            dialogue.append({"speaker": "agent", "text": result["prompt"], "timestamp": _now()})
+        if session["state"] == State.HANDOFF.value and not session.get("handoff_case_id"):
+            reason = session.get("handoff_reason") or (result.get("event", {}).get("handoff") or {}).get("reason") or "other"
+            evidence = transcript
+            if reason == "dispute" and session.get("remembered_promise"):
+                prior = session["remembered_promise"]
+                saved_evidence = store.get_evidence(prior["promise_id"])
+                evidence += (f" | saved promise: amount_paise={prior['amount_paise']}, "
+                             f"pay_date={prior['pay_date']}, mode={prior['mode']}; "
+                             f"saved confirmation transcript={saved_evidence.get('final_transcript') if saved_evidence else 'unavailable'}")
+            case = store.create_handoff(session["account_id"], session_id, reason, evidence, dialogue)
+            session["handoff_case_id"] = case["id"]
+            result["handoff_case"] = case
+        return result
 
 
 def _handle_turn_inner(
@@ -242,6 +275,9 @@ def _handle_turn_inner(
     session = sessions_store.get(session_id)
     if not session:
         raise HTTPException(404, "unknown session")
+    owned_case = ledger_store.get_handoff(session["handoff_case_id"]) if session.get("handoff_case_id") else None
+    if owned_case and owned_case["status"] in {"taken_over", "resolved"}:
+        raise HTTPException(409, "human_taken_over")
     segment_id = stt_meta.get("segment_id")
     if segment_id and segment_id in session.setdefault("seen_segment_ids", []):
         return {"session": session, "transcript": transcript, "prompt": "",
@@ -285,6 +321,7 @@ def _handle_turn_inner(
     hand = detect_handoff(text)
     if hand["handoff"] and mode == "layer":
         _move(session, State.HANDOFF)
+        session["handoff_reason"] = hand["reason"]
         note = handoff_brief(session.get("slots") or {}, text, hand["reason"])
         event = _record_turn(session, mode, text, stt_meta, latency_ms, {
             "decision": "handoff",
@@ -378,7 +415,8 @@ def _layer_turn(
         confirmation = {"turn_id": str(uuid.uuid4()), "transcript": text,
                         "source": "speech" if is_stream or source.startswith("rest") else "ui",
                         "proposal_id": proposal["id"],
-                        "accepted": True if source == "text" else None}
+                        "accepted": True if source == "text" else None,
+                        "replace_promise_id": session.get("remembered_promise", {}).get("promise_id") if session.get("remembered_promise") and session.get("followup_change") else None}
         session["confirmation"] = confirmation
         session["state"] = "COMMITTING"
         result = ledger_store.commit_confirmed_promise(
@@ -429,6 +467,8 @@ def _layer_turn(
         session["proposal"] = None
         session["active_proposal_id"] = None
         session["state"] = "CLARIFY"
+    if session.get("remembered_promise"):
+        session["followup_change"] = True
     verdict = assess(text, verbatim_text=verbatim, today=session["today"], require_confirm_always=True)
     old = session.get("slots") or {}
     new_slots = verdict["slots"]
@@ -496,6 +536,12 @@ def _layer_turn(
                              {"decision": "need_more_slots", "verdict": verdict}, ledger_store, record_global)
         return {"session": session, "transcript": text, "prompt": prompt,
                 "verdict": verdict, "audit_status": session["audit_status"], "event": event}
+
+    prior = session.get("remembered_promise")
+    if prior:
+        session["followup_change"] = (round(float(new_slots["amount_inr"]) * 100) != prior["amount_paise"]
+                                      or new_slots["pay_date"] != prior["pay_date"]
+                                      or new_slots["mode"] != prior["mode"])
 
     session["proposal_version"] = session.get("proposal_version", 0) + 1
     if session.get("proposal"):
@@ -628,6 +674,7 @@ def get_session(session_id: str) -> dict[str, Any]:
 
 @app.get("/api/ledger")
 def get_ledger() -> dict[str, Any]:
+    ledger.evaluate_outcomes(SYNTHETIC_ACCOUNT_ID)
     rows = []
     for saved in ledger.rows:
         row = dict(saved)
@@ -680,16 +727,18 @@ def get_audits(status: str | None = None) -> dict[str, Any]:
 
 
 @app.get("/api/handoffs")
-def get_handoffs() -> dict[str, Any]:
-    rows = [
-        {"session_id": event["session_id"], "reason": event["handoff"]["reason"],
-         "brief": event["brief"], "transcript": event["transcript"],
-         "logged_at": event["logged_at"], "zero_write": True,
-         "audit": sessions.get(event["session_id"], {}).get("audit")}
-        for event in turn_log.events if event.get("decision") == "handoff"
-    ]
+def get_handoffs(status: str | None = None, reason: str | None = None) -> dict[str, Any]:
+    rows = ledger.list_handoffs(status, reason)
+    # Keep the v2 log projection for older clients; persisted cases use canonical reasons.
+    if status is None and reason is None:
+        legacy = [{"session_id": event["session_id"], "reason": "human_requested",
+                   "brief": event["brief"], "transcript": event["transcript"],
+                   "logged_at": event["logged_at"], "legacy": True}
+                  for event in turn_log.events if event.get("decision") == "handoff" and
+                  event.get("handoff", {}).get("reason") == "human_requested"]
+        rows = legacy + rows
     for session in sessions.values():
-        if session.get("handoff_reason") == "open_promise_conflict" or session.get("audit_status") in {"NEEDS_REVIEW", "REVIEW_REQUIRED"}:
+        if status is None and reason is None and not session.get("handoff_case_id") and (session.get("handoff_reason") == "open_promise_conflict" or session.get("audit_status") in {"NEEDS_REVIEW", "REVIEW_REQUIRED"}):
             rows.append({"session_id": session["id"], "reason": session.get("handoff_reason", "audit_conflict"),
                          "brief": "Review transcript and proposal discrepancy.",
                          "transcript": session["turns"][-1]["transcript"] if session["turns"] else "",
@@ -697,6 +746,60 @@ def get_handoffs() -> dict[str, Any]:
                          "zero_write": not any(r["session_id"] == session["id"] for r in ledger.rows),
                          "audit": session.get("audit")})
     return {"rows": rows}
+
+
+@app.get("/api/handoffs/{case_id}")
+def get_handoff_case(case_id: str) -> dict[str, Any]:
+    case = ledger.get_handoff(case_id)
+    if not case:
+        raise HTTPException(404, "unknown handoff")
+    return case
+
+
+class TakeoverBody(BaseModel):
+    taken_over_by: str = "Demo human agent"
+
+
+@app.post("/api/handoffs/{case_id}/takeover")
+def takeover_handoff(case_id: str, body: TakeoverBody | None = None) -> dict[str, Any]:
+    with session_lock:
+        case = ledger.transition_handoff(case_id, "takeover", (body.taken_over_by if body else "Demo human agent"))
+        if not case:
+            raise HTTPException(404, "unknown handoff")
+        session = sessions.get(case["session_id"])
+        if session:
+            session["human_owned"] = True
+        return case
+
+
+@app.post("/api/handoffs/{case_id}/resolve")
+def resolve_handoff(case_id: str) -> dict[str, Any]:
+    try:
+        case = ledger.transition_handoff(case_id, "resolve")
+    except ValueError:
+        raise HTTPException(409, "case must be taken over first") from None
+    if not case:
+        raise HTTPException(404, "unknown handoff")
+    return case
+
+
+@app.get("/api/accounts/{account_id}/promises")
+def account_promises(account_id: str) -> dict[str, Any]:
+    return {"rows": ledger.list_promises(account_id)}
+
+
+class PaymentBody(BaseModel):
+    account_id: str
+    amount_inr: float = Field(gt=0)
+    paid_at: date
+    synthetic: bool = True
+
+
+@app.post("/api/payments")
+def add_payment(body: PaymentBody) -> dict[str, Any]:
+    if not body.synthetic or body.account_id != SYNTHETIC_ACCOUNT_ID:
+        raise HTTPException(400, "synthetic demo account only")
+    return ledger.record_payment(body.account_id, round(body.amount_inr * 100), body.paid_at.isoformat())
 
 
 @app.get("/api/eval")

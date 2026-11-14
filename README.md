@@ -2,7 +2,7 @@
 
 A reliability layer between Gnani Prisma STT and Timbre TTS for Hinglish promise-to-pay calls. It turns speech into a proposed amount, date, and payment method; reads the proposal back; and writes to the ledger only after confirmation.
 
-**Live demo:** https://adapters-alternate-carrying-wool.trycloudflare.com (temporary tunnel; requires the local server to remain running). For a persistent deployment, use the [Render blueprint](https://render.com/deploy?repo=https://github.com/Thesilentprogramer/wadapakka) and set `GNANI_API_KEY` in Render.
+**Live demo:** https://various-participant-features-flag.trycloudflare.com (temporary tunnel; requires the local server to remain running). For a persistent deployment, use the [Render blueprint](https://render.com/deploy?repo=https://github.com/Thesilentprogramer/wadapakka) and set `GNANI_API_KEY` in Render.
 
 ![WadaPakka landing page](docs/shots/landing_final.png)
 
@@ -49,7 +49,15 @@ Open http://127.0.0.1:8000. The demo has turn based and live streaming compariso
 
 ## Deploy
 
-The `Dockerfile` builds the React app and installs ffmpeg. `render.yaml` defines a free Render web service with `GNANI_API_KEY` entered during setup. Server state is in memory, so sessions, ledger rows, and handoffs reset on restart.
+The `Dockerfile` builds the React app and installs ffmpeg. `render.yaml` defines a free Render web service with `GNANI_API_KEY` entered during setup. Sessions remain in memory. The demo uses a temporary SQLite database for Ledger, payment, and handoff records, so these also reset on restart unless a persistent database path is configured by the host.
 ## Reliability v2
 
 The synthetic demo now freezes each proposed amount, date, and payment mode before a full read-back and clear confirmation. A guarded SQLite Ledger allows one open promise per synthetic account across sessions; the naive comparison only shows what it *would* have written. Each saved promise links to transcript evidence with character offsets, and the audit compares heard, proposed, and saved values. `/api/eval/adversarial` replays eight isolated synthetic conversations; `/api/eval` remains a legacy parser fixture demonstration. Live Prisma/Timbre behavior is a separate optional smoke check, and the in-memory session and audit desk reset on restart.
+
+## Handoff desk
+
+Hardship, dispute, wrong-person, and other handoffs become SQLite cases with the triggering line and timestamped conversation transcript. The desk can take over and resolve a case; takeover stops bot replies and blocks guarded bot promise writes for that session. `GET /api/handoffs` supports status and reason filters. The demo uses a synthetic borrower only.
+
+## Memory between calls
+
+A follow-up session reads the last saved promise and speaks its real amount and date through Timbre in the live path. The Ledger keeps promise history: a synthetic covering payment can mark a promise `kept`, a freshly read back and confirmed replacement marks it `changed`, and an overdue unpaid promise becomes `broken`. `POST /api/payments` records synthetic payments; due-date evaluation uses an injectable clock in tests. The UI shows the timeline and starts a follow-up call. A disputed memory goes to the handoff desk with the saved promise attached. See [v3 Eval results](docs/eval_v3_results.md).

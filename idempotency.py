@@ -15,7 +15,7 @@ import tempfile
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
@@ -61,12 +61,14 @@ class Ledger:
         *,
         path: str | Path | None = None,
         failure_injector: Callable[[], None] | None = None,
+        clock: Callable[[], datetime | date] | None = None,
     ) -> None:
         if db_path is not None and path is not None:
             raise ValueError("pass only one of db_path or path")
         selected_path = db_path if db_path is not None else path
         self._lock = threading.RLock()
         self._failure_injector = failure_injector
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._temporary_directory: tempfile.TemporaryDirectory[str] | None = None
         self._memory_connection: sqlite3.Connection | None = None
         self._initialization_error: Exception | None = None
@@ -128,7 +130,7 @@ class Ledger:
                 amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
                 pay_date TEXT NOT NULL,
                 mode TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (status IN ('OPEN')),
+                status TEXT NOT NULL CHECK (status IN ('OPEN', 'kept', 'changed', 'broken', 'partial')),
                 proposal_hash TEXT NOT NULL,
                 confirmation_evidence_id TEXT NOT NULL,
                 confirmed_at TEXT NOT NULL,
@@ -154,8 +156,44 @@ class Ledger:
                 source TEXT NOT NULL CHECK (source IN ('speech', 'ui')),
                 observed_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS handoff_cases (
+                id TEXT PRIMARY KEY, account_id TEXT NOT NULL, session_id TEXT NOT NULL UNIQUE,
+                reason TEXT NOT NULL CHECK (reason IN ('hardship','dispute','wrong_person','other')),
+                reason_evidence TEXT NOT NULL, transcript TEXT NOT NULL, created_at TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('open','taken_over','resolved')),
+                taken_over_by TEXT, taken_over_at TEXT, resolved_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS handoff_audit (
+                id TEXT PRIMARY KEY, case_id TEXT NOT NULL, action TEXT NOT NULL,
+                actor TEXT NOT NULL, occurred_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS payments (
+                id TEXT PRIMARY KEY, account_id TEXT NOT NULL, amount_paise INTEGER NOT NULL,
+                paid_at TEXT NOT NULL, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS promise_outcomes (
+                id TEXT PRIMARY KEY, promise_id TEXT NOT NULL, outcome TEXT NOT NULL,
+                occurred_at TEXT NOT NULL, linked_promise_id TEXT
+            );
             """
         )
+        # v2 files had a restrictive status CHECK. Rebuild once, preserving rows and evidence.
+        schema = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='ledger'").fetchone()[0]
+        if "'kept'" not in schema:
+            conn.execute("ALTER TABLE ledger RENAME TO ledger_v2")
+            conn.execute("DROP INDEX IF EXISTS uq_ledger_one_open_per_account")
+            conn.execute("""CREATE TABLE ledger (
+                promise_id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL UNIQUE,
+                proposal_version INTEGER NOT NULL, account_id TEXT NOT NULL,
+                session_id TEXT NOT NULL, amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+                pay_date TEXT NOT NULL, mode TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('OPEN','kept','changed','broken','partial')),
+                proposal_hash TEXT NOT NULL, confirmation_evidence_id TEXT NOT NULL,
+                confirmed_at TEXT NOT NULL, created_at TEXT NOT NULL
+            )""")
+            conn.execute("INSERT INTO ledger SELECT * FROM ledger_v2")
+            conn.execute("DROP TABLE ledger_v2")
+            conn.execute("CREATE UNIQUE INDEX uq_ledger_one_open_per_account ON ledger(account_id) WHERE status = 'OPEN'")
 
     @staticmethod
     def _proposal_hash(proposal: PromiseProposal) -> str:
@@ -296,6 +334,11 @@ class Ledger:
                 active_connection = conn
                 conn.execute("BEGIN IMMEDIATE")
 
+                owner = conn.execute("SELECT id FROM handoff_cases WHERE session_id = ? AND status IN ('taken_over','resolved')", (frozen.session_id,)).fetchone()
+                if owner is not None:
+                    conn.rollback()
+                    return self._rejected("human_taken_over")
+
                 prior = conn.execute(
                     "SELECT * FROM ledger WHERE proposal_id = ?",
                     (frozen.proposal_id,),
@@ -316,8 +359,10 @@ class Ledger:
                     (frozen.account_id,),
                 ).fetchone()
                 if open_row is not None:
-                    conn.rollback()
-                    return {
+                    replacing = bool(confirmation.get("replace_promise_id") == open_row["promise_id"])
+                    if not replacing:
+                        conn.rollback()
+                        return {
                         "status": "open_promise_conflict",
                         "written": False,
                         "duplicate": False,
@@ -325,12 +370,20 @@ class Ledger:
                         "evidence": None,
                         "evidence_id": None,
                         "error": "open_promise_conflict",
-                    }
+                        }
+                    if open_row["session_id"] == frozen.session_id:
+                        conn.rollback()
+                        return self._rejected("open_promise_conflict")
 
                 if inject_failure:
                     raise RuntimeError("injected ledger write failure")
                 if self._failure_injector is not None:
                     self._failure_injector()
+
+                if open_row is not None:
+                    conn.execute("UPDATE ledger SET status = 'changed' WHERE promise_id = ?", (open_row["promise_id"],))
+                    conn.execute("INSERT INTO promise_outcomes VALUES (?, ?, 'changed', ?, ?)",
+                                 (str(uuid.uuid4()), open_row["promise_id"], observed_at, promise_id))
 
                 conn.execute(
                     """INSERT INTO ledger (
@@ -473,6 +526,107 @@ class Ledger:
                 return self._dict_row(row)
         except Exception as exc:
             raise LedgerUnavailableError("ledger_unavailable") from exc
+
+    def latest_promise(self, account_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connection() as conn:
+            row = conn.execute("SELECT * FROM ledger WHERE account_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1", (account_id,)).fetchone()
+            return self._dict_row(row)
+
+    def list_promises(self, account_id: str) -> list[dict[str, Any]]:
+        self.evaluate_outcomes(account_id)
+        with self._lock, self._connection() as conn:
+            rows = conn.execute("SELECT * FROM ledger WHERE account_id=? ORDER BY created_at, rowid", (account_id,)).fetchall()
+            result = []
+            for row in rows:
+                item = self._dict_row(row)
+                item["outcomes"] = [dict(event) for event in conn.execute(
+                    "SELECT * FROM promise_outcomes WHERE promise_id=? ORDER BY occurred_at, rowid", (row["promise_id"],)).fetchall()]
+                result.append(item)
+            return result
+
+    def record_payment(self, account_id: str, amount_paise: int, paid_at: str) -> dict[str, Any]:
+        if amount_paise <= 0:
+            raise ValueError("amount must be positive")
+        paid = date.fromisoformat(paid_at)
+        now = datetime.now(timezone.utc).isoformat()
+        payment = {"id": str(uuid.uuid4()), "account_id": account_id,
+                   "amount_paise": amount_paise, "amount_inr": amount_paise / 100,
+                   "paid_at": paid.isoformat(), "created_at": now}
+        with self._lock, self._connection() as conn:
+            conn.execute("INSERT INTO payments (id,account_id,amount_paise,paid_at,created_at) VALUES (?,?,?,?,?)",
+                         (payment["id"], account_id, amount_paise, paid.isoformat(), now))
+        self.evaluate_outcomes(account_id)
+        return payment
+
+    def evaluate_outcomes(self, account_id: str) -> None:
+        current = self._clock()
+        today = current.date() if isinstance(current, datetime) else current
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("SELECT * FROM ledger WHERE account_id=? AND status='OPEN'", (account_id,)).fetchall()
+            for row in rows:
+                total = conn.execute("SELECT COALESCE(SUM(amount_paise),0) FROM payments WHERE account_id=? AND paid_at<=? AND paid_at>=date(?)",
+                                     (account_id, row["pay_date"], row["confirmed_at"])).fetchone()[0]
+                outcome = "kept" if total >= row["amount_paise"] else ("partial" if total > 0 and today > date.fromisoformat(row["pay_date"]) else ("broken" if today > date.fromisoformat(row["pay_date"]) else None))
+                if outcome:
+                    conn.execute("UPDATE ledger SET status=? WHERE promise_id=?", (outcome, row["promise_id"]))
+                    conn.execute("INSERT INTO promise_outcomes VALUES (?,?,?,?,NULL)", (str(uuid.uuid4()), row["promise_id"], outcome, now))
+            conn.commit()
+
+    def create_handoff(self, account_id: str, session_id: str, reason: str,
+                       reason_evidence: str, transcript: list[dict[str, Any]]) -> dict[str, Any]:
+        reason = reason if reason in {"hardship", "dispute", "wrong_person"} else "other"
+        with self._lock, self._connection() as conn:
+            conn.execute("INSERT OR IGNORE INTO handoff_cases VALUES (?,?,?,?,?,? ,?,'open',NULL,NULL,NULL)",
+                         (str(uuid.uuid4()), account_id, session_id, reason, reason_evidence,
+                          json.dumps(transcript, ensure_ascii=False), datetime.now(timezone.utc).isoformat()))
+            return self._handoff_row(conn.execute("SELECT * FROM handoff_cases WHERE session_id=?", (session_id,)).fetchone())
+
+    @staticmethod
+    def _handoff_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["transcript"] = json.loads(item["transcript"])
+        return item
+
+    def list_handoffs(self, status: str | None = None, reason: str | None = None) -> list[dict[str, Any]]:
+        with self._lock, self._connection() as conn:
+            rows = conn.execute("SELECT * FROM handoff_cases WHERE (? IS NULL OR status=?) AND (? IS NULL OR reason=?) ORDER BY created_at DESC",
+                                (status, status, reason, reason)).fetchall()
+            return [self._handoff_row(row) for row in rows]
+
+    def get_handoff(self, case_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connection() as conn:
+            item = self._handoff_row(conn.execute("SELECT * FROM handoff_cases WHERE id=?", (case_id,)).fetchone())
+            if item:
+                item["audit_events"] = [dict(row) for row in conn.execute(
+                    "SELECT * FROM handoff_audit WHERE case_id=? ORDER BY occurred_at, rowid", (case_id,)).fetchall()]
+            return item
+
+    def transition_handoff(self, case_id: str, action: str, actor: str = "demo-agent") -> dict[str, Any] | None:
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM handoff_cases WHERE id=?", (case_id,)).fetchone()
+            if row is None:
+                conn.rollback()
+                return None
+            if action == "takeover" and row["status"] == "open":
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute("UPDATE handoff_cases SET status='taken_over', taken_over_by=?, taken_over_at=? WHERE id=?", (actor, now, case_id))
+            elif action == "resolve" and row["status"] == "taken_over":
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute("UPDATE handoff_cases SET status='resolved', resolved_at=? WHERE id=?", (now, case_id))
+            elif action not in {"takeover", "resolve"} or (action == "resolve" and row["status"] == "open"):
+                conn.rollback()
+                raise ValueError("invalid handoff transition")
+            else:
+                now = None
+            if now:
+                conn.execute("INSERT INTO handoff_audit VALUES (?,?,?,?,?)", (str(uuid.uuid4()), case_id, action, actor, now))
+            conn.commit()
+            return self.get_handoff(case_id)
 
     def _raise_if_unavailable(self) -> None:
         if self._initialization_error is not None:

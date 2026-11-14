@@ -138,6 +138,8 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
 
     async def speak(prompt: str, turn_id: int) -> None:
         nonlocal first_audio
+        if session.get("human_owned"):
+            return
         payload = {"text": prompt, "voice": DEFAULT_VOICE, "model": DEFAULT_MODEL,
                    "language": DEFAULT_LANGUAGE, "speed": 1.0,
                    "audio_config": {"sample_rate": 16000, "num_channels": 1,
@@ -151,6 +153,8 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                 await upstream.send(json.dumps(payload))
                 async for raw in upstream:
                     message = json.loads(raw)
+                    if session.get("human_owned"):
+                        return
                     if message.get("type") == "audio":
                         audio = message.get("data", {}).get("audio")
                         if audio:
@@ -186,6 +190,8 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                     await send({"type": "tts_first_byte", "turn_id": turn_id,
                                 "end_to_audio_ms": round((first_audio - speech_end) * 1000) if speech_end else None})
                 for offset in range(0, len(pcm), 8192):
+                    if session.get("human_owned"):
+                        return
                     await send({"type": "agent_audio", "turn_id": turn_id,
                                 "audio": base64.b64encode(pcm[offset:offset + 8192]).decode()})
                 delivered = True
@@ -250,7 +256,7 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                         await send({"type": "connected", "config": event.get("config")})
                         first_audio = None
                         active_turn = gate.begin(False)
-                        tts_task = asyncio.create_task(speak("Namaste, main WadaPakka bol rahi hoon. Aap kab, kitna, aur kaise bharenge?", active_turn))
+                        tts_task = asyncio.create_task(speak(session.get("opening_prompt", "Namaste."), active_turn))
                     elif kind == "speech_start":
                         speech_start = time.perf_counter()
                         confirmed_speech = True
@@ -276,7 +282,7 @@ async def live_socket(ws: WebSocket, session_id: str) -> None:
                                     "utterance_id": event.get("utterance_id"), "latency": event.get("latency"),
                                     "is_final": event.get("is_final", True), "metrics": metrics,
                                     "ignored": not allowed})
-                        if not event.get("is_final", True) or not allowed or session["state"] in {"HANDOFF", "REFUSED", "WRITTEN"}:
+                        if not event.get("is_final", True) or not allowed or session.get("human_owned") or session["state"] in {"HANDOFF", "REFUSED", "WRITTEN"}:
                             continue
                         confirmed_speech = False
                         reply = _handle_turn(session_id, text, "layer", None,

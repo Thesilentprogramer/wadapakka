@@ -171,10 +171,15 @@ export interface AdversarialEvalResponse {
 }
 
 export interface HandoffRow {
+  id?: string;
   session_id: string;
   reason: string;
+  reason_evidence?: string;
+  status?: 'open' | 'taken_over' | 'resolved';
+  taken_over_by?: string;
+  taken_over_at?: string;
   brief: string;
-  transcript?: string;
+  transcript?: string | Array<{ speaker: string; text: string; timestamp: string }>;
   transcript_snippets?: string[];
   logged_at: string;
   unresolved_slot_candidates?: Record<string, unknown> | unknown[];

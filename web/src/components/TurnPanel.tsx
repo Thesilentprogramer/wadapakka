@@ -23,7 +23,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
-import { useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Button } from './ui/Button';
 import { SpotlightCard } from './ui/SpotlightCard';
 import {
@@ -677,6 +677,31 @@ function ActivityIcon() {
   return <Activity size={15} aria-hidden="true" />;
 }
 
+function PromiseTimeline({ refreshKey, onFollowup }: { refreshKey: string; onFollowup: () => void }) {
+  const [history, setHistory] = useState<Array<LedgerRow & { outcomes?: Array<{ outcome: string; occurred_at: string; linked_promise_id?: string }> }>>([]);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    fetch('/api/accounts/synthetic-ravi-kumar/promises').then(async response => {
+      if (!response.ok) throw new Error('Promise history is unavailable.');
+      return response.json() as Promise<{ rows: typeof history }>;
+    }).then(data => { if (active) { setHistory(data.rows); setError(''); } })
+      .catch(() => { if (active) setError('Promise history is unavailable.'); });
+    return () => { active = false; };
+  }, [refreshKey]);
+  return <section className="mt-5 border-t border-[color:var(--line)] pt-4" aria-label="Promise timeline">
+    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold">Promise timeline</h3><Button type="button" variant="secondary" onClick={onFollowup}>Start follow-up call</Button></div>
+    <p className="mt-1 text-xs text-[var(--muted)]">Synthetic account · outcomes use recorded demo payments and the server clock.</p>
+    {error && <p role="alert" className="text-xs text-[var(--red)]">{error}</p>}
+    {!history.length && !error && <p className="mt-3 text-sm text-[var(--muted)]">No confirmed promise yet.</p>}
+    <ol className="mt-3 space-y-3">{history.map(row => <li key={row.promise_id} className="rounded-xl bg-[var(--panel-soft)] p-3 text-sm">
+      <strong>Made</strong> · ₹{Number(row.amount_inr || 0).toLocaleString('en-IN')} by {row.pay_date} · {row.mode}
+      <span className="ml-2 rounded-full bg-white px-2 py-1 text-xs font-semibold capitalize text-[var(--primary)]">{row.status}</span>
+      {row.outcomes?.map(event => <p key={`${event.outcome}-${event.occurred_at}`} className="mb-0 mt-2 text-xs text-[var(--muted)]">→ {event.outcome}{event.linked_promise_id ? ` · linked to ${event.linked_promise_id.slice(0, 8)}` : ''} · {event.occurred_at}</p>)}
+    </li>)}</ol>
+  </section>;
+}
+
 function HandoffDesk({ handoffs, handoffError, audits, sessionAudits, auditError, ledger, onRefreshHandoffs, onRefreshAudits, onUseSample }: {
   handoffs: ReturnType<typeof useTurnCall>['handoffs'];
   handoffError: string;
@@ -688,6 +713,21 @@ function HandoffDesk({ handoffs, handoffError, audits, sessionAudits, auditError
   onRefreshAudits: () => void;
   onUseSample: () => void;
 }) {
+  const [actionCase, setActionCase] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
+  async function changeCase(id: string, action: 'takeover' | 'resolve') {
+    setActionCase(id);
+    setActionError('');
+    try {
+      const response = await fetch(`/api/handoffs/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+      if (!response.ok) throw new Error('Could not update this case. Refresh and try again.');
+      onRefreshHandoffs();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not update this case.');
+    } finally {
+      setActionCase(null);
+    }
+  }
   const auditRows = [...audits, ...Object.values(sessionAudits)];
   const latestAudit = (sessionId: string) => sessionAudits[sessionId] || auditRows.find((audit) => audit.session_id === sessionId);
   const needsReview = auditRows.filter((audit, index, all) => {
@@ -707,30 +747,34 @@ function HandoffDesk({ handoffs, handoffError, audits, sessionAudits, auditError
       </div>
       <button type="button" className="sample-line mt-2" onClick={onUseSample}>Trigger sample handoff: “mujhe aapke manager se baat karni hai” <ArrowRight size={14} aria-hidden="true" /></button>
       {handoffError && <p role="alert" className="mt-2 text-sm text-[var(--red)]">Handoffs unavailable: {handoffError}</p>}
+      {actionError && <p role="alert" className="mt-2 text-sm text-[var(--red)]">{actionError}</p>}
       {!handoffs.length && <p className="mt-2 text-sm text-[var(--muted)]">No handoffs yet. A reason, relevant transcript, and audit discrepancy will appear when a case needs a person.</p>}
       <div className="space-y-3">
-        {handoffs.slice().reverse().map((row) => {
+        {handoffs.filter(row => !row.legacy).slice().reverse().map((row) => {
           const audit = row.audit || latestAudit(row.session_id);
-          const transcript = row.transcript || row.transcript_snippets?.join(' · ') || (Array.isArray(audit?.transcript_snippets) ? audit?.transcript_snippets.join(' · ') : '');
+          const transcript = typeof row.transcript === 'string' ? row.transcript : row.transcript_snippets?.join(' · ') || (Array.isArray(audit?.transcript_snippets) ? audit?.transcript_snippets.join(' · ') : '');
           const candidates = row.unresolved_slot_candidates || audit?.parsed_candidates;
           const safetyCase = ['hardship', 'wrong_person', 'dispute'].some((reason) => row.reason.toLowerCase().includes(reason));
           const hasRows = ledger.some((item) => item.session_id === row.session_id);
           const status = auditStatusOf(audit);
           return (
-            <article key={`${row.session_id}-${row.logged_at}`} className="mt-3 rounded-xl bg-[#fff7e9] p-4">
+            <article key={row.id || `${row.session_id}-${row.logged_at}`} className="mt-3 rounded-xl bg-[#fff7e9] p-4">
               <div className="flex flex-wrap items-center gap-2">
                 <h4 className="flex items-center gap-2 text-sm font-semibold capitalize text-[var(--amber)]"><UserRound size={15} aria-hidden="true" />{row.reason.replaceAll('_', ' ')}</h4>
-                <span className="rounded-full bg-white px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-[var(--amber)]">{status}</span>
+                <span className="rounded-full bg-white px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-[var(--amber)]">{row.status || status}</span>
                 {safetyCase && !hasRows && <span className="rounded-full bg-[#e7f6ed] px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-[var(--green)]">0 Ledger writes</span>}
               </div>
               <p className="mt-2 break-words whitespace-pre-wrap text-sm leading-relaxed text-[var(--ink)]">{row.brief || 'Review the transcript and resolve the open issue.'}</p>
+              {row.reason_evidence && <p className="mt-2 rounded-lg bg-[#fff0cb] px-3 py-2 text-sm font-semibold leading-relaxed text-[var(--ink)]"><span className="block text-[10px] uppercase tracking-wide text-[var(--amber)]">Reason evidence</span>{row.reason_evidence}</p>}
+              {Array.isArray(row.transcript) && <details className="mt-3 text-xs text-[var(--ink)]"><summary className="cursor-pointer font-semibold">Full transcript · {row.transcript.length} turns</summary><ol className="mt-2 space-y-2">{row.transcript.map((turn, index) => <li key={index} className="rounded-lg bg-white p-2"><strong className="capitalize">{turn.speaker}</strong> <time className="text-[var(--muted)]">{turn.timestamp}</time><p className="mb-0 mt-1">{turn.text}</p></li>)}</ol></details>}
               {transcript && <p className="mb-0 mt-2 border-t border-[#f0dfbe] pt-2 text-xs leading-relaxed text-[var(--muted)]"><strong className="text-[var(--ink)]">Last relevant transcript:</strong> “{transcript}”</p>}
               {candidates && <p className="mb-0 mt-2 break-words text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Unresolved slot candidates:</strong> {typeof candidates === 'string' ? candidates : JSON.stringify(candidates)}</p>}
               <p className="mb-0 mt-2 text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Read-back:</strong> {row.readback_status || audit?.proposal_snapshot?.readback_status || 'not supplied'} · <strong className="text-[var(--ink)]">Audit discrepancy:</strong> {discrepancyText(audit)}</p>
               <div className="mt-2 flex items-center justify-between gap-3 text-xs text-[var(--muted)]">
-                <span>Session {row.session_id.slice(0, 8)} · {row.logged_at}</span>
+                <span>Session {row.session_id.slice(0, 8)} · {row.logged_at || row.taken_over_at || ''}</span>
                 <a className="inline-flex shrink-0 items-center gap-1 font-semibold text-[var(--primary)] underline-offset-2 hover:underline" href={`/api/session/${encodeURIComponent(row.session_id)}/audit`} target="_blank" rel="noreferrer">Open audit <ExternalLink size={12} /></a>
               </div>
+              {row.id && <div className="mt-3 flex items-center gap-2">{row.status === 'open' && <Button type="button" variant="primary" disabled={actionCase === row.id} onClick={() => void changeCase(row.id!, 'takeover')}>Take over</Button>}{row.status === 'taken_over' && <Button type="button" variant="secondary" disabled={actionCase === row.id} onClick={() => void changeCase(row.id!, 'resolve')}>Resolve case</Button>}{row.taken_over_by && <span className="text-xs text-[var(--muted)]">Owned by {row.taken_over_by}</span>}</div>}
             </article>
           );
         })}
@@ -909,6 +953,7 @@ export default function TurnPanel({ active = true }: { active?: boolean }) {
           </div>
           {ledgerError && <p role="alert" className="text-sm text-[var(--red)]">Ledger unavailable: {ledgerError}</p>}
           <PromiseLedger rows={ledger} />
+          <PromiseTimeline refreshKey={ledger.map(row => `${row.promise_id}:${row.status}`).join('|')} onFollowup={() => void startComparison()} />
           <ProposalQueue results={results} audits={audits} sessionAudits={sessionAudits} ledger={ledger} unconfirmed={unconfirmedProposals} />
           <HandoffDesk
             handoffs={handoffs}

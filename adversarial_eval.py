@@ -61,6 +61,8 @@ def run_adversarial_eval(
         _run_variant(case, handle_turn, make_session, ledger_factory, anchor)
         for case in fixture.get("negative_variants", [])
     ]
+    followup_results = [_run_followup(case, handle_turn, make_session, ledger_factory, anchor)
+                        for case in fixture.get("followup_cases", [])]
 
     metric_population = persona_results + variant_results
     valid_cases = [case for case in persona_results if case["checks"]["valid_promise"]]
@@ -91,7 +93,7 @@ def run_adversarial_eval(
         ),
     }
 
-    passed = all(result["passed"] for result in metric_population)
+    passed = all(result["passed"] for result in metric_population + followup_results)
     return {
         "schema_version": 1,
         "today": fixture["today"],
@@ -103,12 +105,42 @@ def run_adversarial_eval(
         "metrics": metric_results,
         "cases": persona_results,
         "negative_variants": variant_results,
+        "followup_cases": followup_results,
         "limitations": [
             "Text replay does not measure Prisma transcription accuracy or live playback timing.",
             "The date-correction script simulates a transcript arriving during read-back; live audio barge-in needs a separate ReadbackGate test.",
             "Each persona and variant receives a fresh in-memory session map and isolated ledger.",
         ],
     }
+
+
+def _run_followup(case: dict[str, Any], handle_turn: Callable[..., dict[str, Any]],
+                  make_session: Callable[..., dict[str, Any]], ledger_factory: Callable[[], Any],
+                  today: date) -> dict[str, Any]:
+    env = _new_environment(make_session, ledger_factory, today)
+    proposals: dict[str, str] = {}
+    steps = [
+        _execute_step({"name": "initial_offer", "transcript": case["initial_offer"], "expect_rows": 0}, env, handle_turn, proposals, case["id"]),
+        _execute_step({"name": "initial_yes", "transcript": "haan", "expect_rows": 1}, env, handle_turn, proposals, case["id"]),
+    ]
+    if case.get("payment"):
+        env["ledger"].record_payment(env["session"]["account_id"], case["payment"]["amount_paise"], case["payment"]["paid_at"])
+    followup = _make_session(make_session, env["sessions"], today, env["ledger"])
+    env["aliases"]["followup"] = followup
+    if case.get("followup_offer"):
+        steps.append(_execute_step({"name": "followup_offer", "session": "followup", "transcript": case["followup_offer"], "expect_rows": 1}, env, handle_turn, proposals, case["id"]))
+    steps.append(_execute_step({"name": "followup_utterance", "session": "followup", "transcript": case["followup_utterance"], "expect_rows": 1}, env, handle_turn, proposals, case["id"]))
+    rows = _ledger_rows(env["ledger"])
+    saved = rows[0] if rows else {}
+    checks = {
+        "memory_from_ledger": "₹3,000" in followup["opening_prompt"] and "15 Nov" in followup["opening_prompt"],
+        "outcome": saved.get("status") == case["expected_outcome"],
+        "zero_unconfirmed_writes": len(rows) == case["expected_rows"],
+        "expected_steps": all(step["expectations_ok"] for step in steps),
+    }
+    return {"id": case["id"], "persona": case["persona"], "opening_prompt": followup["opening_prompt"],
+            "checks": checks, "turns": steps, "passed": all(checks.values()),
+            "observed": {"row_count": len(rows), "outcome": saved.get("status")}}
 
 
 def _metric(passed: int, total: int, description: str) -> dict[str, Any]:
@@ -137,6 +169,9 @@ def _run_case(
     observed_state = env["session"].get("state")
     observed_handoff = _handoff_reason(turns, env["session"])
     checks = _base_checks(case, turns, rows, expected_rows, observed_state, observed_handoff)
+    if gold.get("handoff_reason") in {"hardship", "dispute", "wrong_person"}:
+        cases = env["ledger"].list_handoffs(reason=gold["handoff_reason"])
+        checks["persisted_handoff_reason"] = len(cases) == 1 and cases[0]["session_id"] == env["session"]["id"]
     return {
         "id": case["id"],
         "persona": case["persona"],
@@ -165,7 +200,7 @@ def _run_variant(
     aliases = {"primary": env["session"]}
     for alias in case.get("sessions", []):
         if alias not in aliases:
-            aliases[alias] = _make_session(make_session, env["sessions"], today)
+            aliases[alias] = _make_session(make_session, env["sessions"], today, env["ledger"])
     env["aliases"] = aliases
     proposals: dict[str, str] = {}
     turns: list[dict[str, Any]] = []
@@ -234,12 +269,14 @@ def _run_variant(
 def _new_environment(make_session: Callable[..., dict[str, Any]], ledger_factory: Callable[[], Any], today: date) -> dict[str, Any]:
     sessions: dict[str, dict[str, Any]] = {}
     ledger = ledger_factory()
-    session = _make_session(make_session, sessions, today)
+    if hasattr(ledger, "_clock"):
+        ledger._clock = lambda: today
+    session = _make_session(make_session, sessions, today, ledger)
     return {"sessions": sessions, "ledger": ledger, "session": session, "aliases": {"primary": session}}
 
 
-def _make_session(make_session: Callable[..., dict[str, Any]], sessions: dict[str, dict[str, Any]], today: date) -> dict[str, Any]:
-    result = make_session(sessions_store=sessions, today=today)
+def _make_session(make_session: Callable[..., dict[str, Any]], sessions: dict[str, dict[str, Any]], today: date, ledger: Any = None) -> dict[str, Any]:
+    result = make_session(sessions_store=sessions, today=today, ledger_store=ledger)
     if isinstance(result, dict) and isinstance(result.get("session"), dict):
         return result["session"]
     return result

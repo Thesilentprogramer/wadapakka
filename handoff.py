@@ -36,9 +36,9 @@ DISTRESS_PATTERNS = [
 ]
 
 SAFETY_PATTERNS = {
-    "wrong_person": [r"wrong number", r"wrong person", r"ravi yahan nahi", r"गलत नंबर", r"यहाँ नहीं"],
-    "hardship": [r"job chali", r"naukri.*(?:gayi|chali)", r"abhi nahi de sak", r"lost my job", r"नौकरी.*गई"],
-    "dispute": [r"amount galat", r"statement bhejo", r"dispute", r"राशि गलत", r"स्टेटमेंट भेजो"],
+    "wrong_person": [r"wrong number", r"wrong person", r"ravi yahan nahi", r"galat number", r"main ravi nahi hoon", r"गलत नंबर", r"यहाँ नहीं"],
+    "hardship": [r"job chali", r"naukri.*(?:gayi|chali)", r"abhi nahi de sak", r"lost my job", r"hospital", r"इलाज", r"नौकरी.*गई"],
+    "dispute": [r"amount galat", r"statement bhejo", r"dispute", r"maine already pay kiya", r"maine aisa nahi bola", r"maine.*(?:wada|promise).*nahi", r"राशि गलत", r"स्टेटमेंट भेजो"],
 }
 
 
@@ -50,10 +50,10 @@ def detect_handoff(transcript: str) -> dict:
                 return {"handoff": True, "reason": reason, "pattern": pat}
     for pat in HANDOFF_PATTERNS:
         if re.search(pat, raw, flags=re.IGNORECASE):
-            return {"handoff": True, "reason": "human_requested", "pattern": pat}
+                return {"handoff": True, "reason": "human_requested", "pattern": pat}
     for pat in DISTRESS_PATTERNS:
         if re.search(pat, raw, flags=re.IGNORECASE):
-            return {"handoff": True, "reason": "distress", "pattern": pat}
+                return {"handoff": True, "reason": "distress", "pattern": pat}
     return {"handoff": False, "reason": None, "pattern": None}
 
 
