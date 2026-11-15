@@ -17,6 +17,8 @@ WadaPakka is a reliability layer that sits between **Gnani Prisma STT** and **Gn
 6. **Hand off**: difficult or upset callers go to a human desk with a short brief.
 7. **Observe**: every turn is logged with its transcript, slots, decision and latency.
 
+**Ingestible layer:** a Python SDK plus REST for any lender or voice stack. Run `pip install git+https://github.com/Thesilentprogramer/wadapakka`, then call `layer.on_turn(...)`. It returns a read-back, commit or handoff decision. Lenders set their own limits, modes and handoff keywords, and get signed webhooks. Drop-in examples cover Pipecat, LiveKit and any telephony stack.
+
 **Live mode**: Prisma streaming over WebSocket, with real interruptions that stop Timbre's speech. A loud sound only lowers the agent's volume. The agent stops only after sustained speech or Prisma's speech-start signal, with noise calibration.
 
 ## Measured results (real Gnani APIs)

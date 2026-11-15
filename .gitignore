@@ -6,3 +6,5 @@ __pycache__/
 .venv/
 web/node_modules/
 web/*.tsbuildinfo
+build/
+*.egg-info/

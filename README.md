@@ -32,6 +32,23 @@ The [evaluation notes](docs/eval_results.md) report eight hand authored text fix
 
 The [API notes](docs/api_notes.md) record scripted streaming checks on one generated clip: **698–755 ms** from speech end to final STT, **1,011–1,269 ms** to first TTS byte, and one **266 ms** injected audio barge in reaction. These are smoke observations, not production latency benchmarks.
 
+## Use it as an SDK
+
+The reliability layer ships as an ingestible Python package, so any lender or voice stack can use it. It works with Pipecat, LiveKit, Exotel, Twilio, Plivo or an in-house dialer.
+
+```bash
+pip install git+https://github.com/Thesilentprogramer/wadapakka
+```
+
+```python
+from wadapakka import Layer, LenderConfig, SQLiteStore
+layer = Layer(config=LenderConfig(lender_name="Demo Finance", max_amount_inr=50_000), store=SQLiteStore("wp.db"))
+d = layer.on_turn("call-1", "synthetic-ravi-kumar", "paanch hazaar, 20 November, UPI")  # -> readback, d.say
+d = layer.on_turn("call-1", "synthetic-ravi-kumar", "haan")                              # -> commit (guarded, idempotent)
+```
+
+It gives you per-lender limits and handoff keywords, signed webhooks (`promise.committed`, `promise.changed`, `handoff.opened`), memory between calls and handoff takeover. It runs the same engine as this demo. See [docs/SDK.md](docs/SDK.md), `examples/quickstart.py` (offline) and the Pipecat and LiveKit sketches in `examples/`. If you're not on Python, the same flow is available over REST at https://wadapakka.onrender.com.
+
 ## Run locally
 
 Requirements: Python 3.11, Node 22, ffmpeg, and a Gnani API key for voice features. Text fixtures and typed turns can run without the key.
