@@ -4,6 +4,12 @@ A reliability layer between Gnani Prisma STT and Timbre TTS for Hinglish promise
 
 **Live demo:** https://wadapakka.vercel.app (React frontend on Vercel; `/api/*` is rewritten to the backend). **API:** https://wadapakka.onrender.com (FastAPI on Render, free tier; `GET /health`). The first request after ~15 min idle can take up to a minute while Render wakes the service, and the SQLite ledger resets on each restart/redeploy (synthetic demo data only). Live-streaming mode opens its WebSocket directly to the Render host, because Vercel rewrites cannot proxy WebSockets.
 
+## Demo video
+
+- **[2–3 minute walkthrough](https://github.com/Thesilentprogramer/wadapakka/blob/main/demo/WadaPakka_Walkthrough.mp4)** — official demo of the live product (promise confirmation, Ledger, memory between calls, and the handoff desk).
+- **[1:07 motion trailer](https://github.com/Thesilentprogramer/wadapakka/blob/main/demo/WadaPakka_Demo.mp4)** — short animated overview of the same flow.
+- **1-page pitch:** [WadaPakka_Pitch.pdf](https://github.com/Thesilentprogramer/wadapakka/blob/main/WadaPakka_Pitch.pdf) · [PITCH.md](PITCH.md)
+
 ![WadaPakka landing page](docs/shots/landing_final.png)
 
 ## The problem
