@@ -576,7 +576,9 @@ export function useLiveCall({ onPipelineUpdate }: LiveCallOptions = {}) {
 
       if (!ids.layer) throw new Error('Layer session was not created.');
       const socketProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const socket = new WebSocket(`${socketProtocol}//${location.host}/api/live/${ids.layer}`);
+      // Vercel rewrites cannot proxy WebSockets, so a static frontend connects straight to the API host.
+      const wsBase = (import.meta.env.VITE_WS_BASE as string | undefined)?.replace(/\/$/, '') || `${socketProtocol}//${location.host}`;
+      const socket = new WebSocket(`${wsBase}/api/live/${ids.layer}`);
       socketRef.current = socket;
       socket.onmessage = handleMessage;
       socket.onclose = () => {

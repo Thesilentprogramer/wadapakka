@@ -2,6 +2,8 @@
 
 **Built by Shubham Indulkar (solo) for the Great Indian AI Internship Challenge by Gnani.ai**
 
+**Live demo:** https://wadapakka.vercel.app · **API:** https://wadapakka.onrender.com · **Code:** https://github.com/Thesilentprogramer/wadapakka
+
 ## Problem
 Voice agents on Indian loan-collection calls hear promises to pay in Hinglish, like "dhai hazaar, parso, UPI se". A transcription or parsing mistake ("sawa teen sau" heard as 3500, or "kal" read as the wrong day) silently writes the wrong promise to the ledger. Echo from the agent's own voice also triggers false interruptions. The result is wrong follow-ups, angry borrowers and broken trust.
 

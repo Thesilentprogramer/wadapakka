@@ -2,7 +2,7 @@
 
 A reliability layer between Gnani Prisma STT and Timbre TTS for Hinglish promise-to-pay calls. It turns speech into a proposed amount, date, and payment method; reads the proposal back; and writes to the ledger only after confirmation.
 
-**Live demo:** https://various-participant-features-flag.trycloudflare.com (temporary tunnel; requires the local server to remain running). For a persistent deployment, use the [Render blueprint](https://render.com/deploy?repo=https://github.com/Thesilentprogramer/wadapakka) and set `GNANI_API_KEY` in Render.
+**Live demo:** https://wadapakka.vercel.app (React frontend on Vercel; `/api/*` is rewritten to the backend). **API:** https://wadapakka.onrender.com (FastAPI on Render, free tier; `GET /health`). The first request after ~15 min idle can take up to a minute while Render wakes the service, and the SQLite ledger resets on each restart/redeploy (synthetic demo data only). Live-streaming mode opens its WebSocket directly to the Render host, because Vercel rewrites cannot proxy WebSockets.
 
 ![WadaPakka landing page](docs/shots/landing_final.png)
 
