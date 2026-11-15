@@ -1,86 +1,127 @@
 # WadaPakka
 
-A reliability layer between Gnani Prisma STT and Timbre TTS for Hinglish promise-to-pay calls. It turns speech into a proposed amount, date, and payment method; reads the proposal back; and writes to the ledger only after confirmation.
+A reliability layer for Hinglish promise-to-pay collection calls.
 
-**Live demo:** https://wadapakka.vercel.app (React frontend on Vercel; `/api/*` is rewritten to the backend). **API:** https://wadapakka.onrender.com (FastAPI on Render, free tier; `GET /health`). The first request after ~15 min idle can take up to a minute while Render wakes the service, and the SQLite ledger resets on each restart/redeploy (synthetic demo data only). Live-streaming mode opens its WebSocket directly to the Render host, because Vercel rewrites cannot proxy WebSockets.
+WadaPakka sits between Gnani Prisma STT and Timbre TTS. It reads back every promise, commits only on a clear "haan", and hands hardship calls to a human. It ships as a Python SDK that lenders can drop into an existing collection bot.
 
-## Demo video
+**Live demo:** [https://wadapakka.vercel.app](https://wadapakka.vercel.app)
 
-- **[2–3 minute walkthrough](https://github.com/Thesilentprogramer/wadapakka/blob/main/demo/WadaPakka_Walkthrough.mp4)** — official demo of the live product (promise confirmation, Ledger, memory between calls, and the handoff desk).
-- **[1:07 motion trailer](https://github.com/Thesilentprogramer/wadapakka/blob/main/demo/WadaPakka_Demo.mp4)** — short animated overview of the same flow.
-- **1-page pitch:** [WadaPakka_Pitch.pdf](https://github.com/Thesilentprogramer/wadapakka/blob/main/WadaPakka_Pitch.pdf) · [PITCH.md](PITCH.md)
+A walkthrough and a short trailer are in `demo/`.
 
-![WadaPakka landing page](docs/shots/landing_final.png)
+## Screenshots
 
-## The problem
+![Landing page](docs/images/01-hero.png)
 
-Hinglish collection calls mix numbers, relative dates, English payment terms, and corrections. A plausible STT transcript can contain the wrong amount. A voice agent that writes the first parseable triple can therefore record an unconfirmed promise.
+*The live product homepage.*
 
-## Architecture
+![Turn-based comparison](docs/images/02-turn-panel.png)
+
+*L1 turn panel: the naive path would write immediately; the layer waits for a read-back and "haan".*
+
+![Live call](docs/images/03-live-panel.png)
+
+*L2 live streaming call, with promise capture and barge-in controls.*
+
+![Promise ledger](docs/images/04-promise-ledger.png)
+
+*Guarded ledger: only confirmed promises are saved, with a timeline and unconfirmed queue.*
+
+![Handoff desk](docs/images/05-handoff-desk.png)
+
+*Handoff desk for hardship and dispute calls, including the triggering transcript and takeover.*
+
+![Eval results](docs/images/06-eval-results.png)
+
+*Fixture evaluation: naive parser vs the reliability layer.*
+
+## Features
+
+- Normalizes Hinglish amounts, dates, and payment modes
+- Reads every proposed promise back before a write
+- Commits only on an explicit "haan"; retries are idempotent
+- One open promise per account, with a said-vs-saved audit trail
+- Hands hardship, dispute, and wrong-person calls to a human desk
+- Remembers promises across calls (kept, changed, or broken)
+- Python SDK, REST API, and signed webhooks for existing voice stacks
+
+## How it works
 
 ```mermaid
 flowchart LR
     A[Caller audio] --> B[Gnani Prisma STT]
-    B --> C[Normalize Hinglish slots]
-    C --> D[Verify and read back]
+    B --> C[WadaPakka]
+    C --> D[Read back]
     D --> E[Gnani Timbre TTS]
     E --> A
-    A -->|Confirm or correct| D
-    D -->|Confirmed| F[Idempotent ledger]
-    D -->|Human requested or distress| G[Handoff desk]
+    A -->|haan or correction| D
+    D -->|Confirmed| F[Guarded ledger]
+    D -->|Hardship or dispute| G[Handoff desk]
 ```
 
-L1 uses REST STT with turn based audio; WebM is converted to WAV with ffmpeg. L2 uses WebSocket streaming with interruption handling. The FastAPI server keeps the Gnani key out of the browser and serves the built React app.
+Speech is transcribed, slots are normalized, and the proposal is spoken back. A ledger write happens only after a clear yes. If the caller signals hardship or a dispute, the session moves to a human.
 
-## Measured results
-
-The [evaluation notes](docs/eval_results.md) report eight hand authored text fixtures: naive **1/8 (12.5%)**, layer **8/8 (100%)** exact triples. Seven cases use different supplied transcripts, so this is a fixture demonstration, not measured STT improvement. In three clean synthetic audio cases, both parsers scored **2/3 (66.7%)** before borrower confirmation; the layer made **0 unconfirmed writes**. One Prisma substitution rendered ₹325 as ₹3,500.
-
-The [API notes](docs/api_notes.md) record scripted streaming checks on one generated clip: **698–755 ms** from speech end to final STT, **1,011–1,269 ms** to first TTS byte, and one **266 ms** injected audio barge in reaction. These are smoke observations, not production latency benchmarks.
-
-## Use it as an SDK
-
-The reliability layer ships as an ingestible Python package, so any lender or voice stack can use it. It works with Pipecat, LiveKit, Exotel, Twilio, Plivo or an in-house dialer.
-
-```bash
-pip install git+https://github.com/Thesilentprogramer/wadapakka
-```
+## SDK quick start
 
 ```python
-from wadapakka import Layer, LenderConfig, SQLiteStore
-layer = Layer(config=LenderConfig(lender_name="Demo Finance", max_amount_inr=50_000), store=SQLiteStore("wp.db"))
-d = layer.on_turn("call-1", "synthetic-ravi-kumar", "paanch hazaar, 20 November, UPI")  # -> readback, d.say
-d = layer.on_turn("call-1", "synthetic-ravi-kumar", "haan")                              # -> commit (guarded, idempotent)
+from wadapakka import Layer, LenderConfig, InMemoryStore
+
+layer = Layer(config=LenderConfig(), store=InMemoryStore())
+
+decision = layer.on_turn("call-1", "synthetic-ravi-kumar", "paanch hazaar, 20 November, UPI")
+# decision.action == "readback"; speak decision.say via your TTS
+
+decision = layer.on_turn("call-1", "synthetic-ravi-kumar", "haan")
+# decision.action == "commit"; decision.audit has the said-vs-saved trail
+
+layer.confirm("call-1", yes=True)   # button or DTMF-style confirmation
+layer.commit("call-1")              # idempotent; will not force a write
 ```
 
-It gives you per-lender limits and handoff keywords, signed webhooks (`promise.committed`, `promise.changed`, `handoff.opened`), memory between calls and handoff takeover. It runs the same engine as this demo. See [docs/SDK.md](docs/SDK.md), `examples/quickstart.py` (offline) and the Pipecat and LiveKit sketches in `examples/`. If you're not on Python, the same flow is available over REST at https://wadapakka.onrender.com.
+`on_turn` returns a `Decision` with `action` (`readback`, `wait`, `commit`, `handoff`, `noop`), `say`, `proposal`, and `audit`. Install the package from this repository. See `docs/SDK.md` and `examples/quickstart.py` for Pipecat, LiveKit, and telephony adapters.
 
 ## Run locally
 
-Requirements: Python 3.11, Node 22, ffmpeg, and a Gnani API key for voice features. Text fixtures and typed turns can run without the key.
+Requirements: Python 3.11, Node 22, ffmpeg, and a Gnani API key for voice features. Text fixtures and typed turns run without the key.
 
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cd web && npm ci && npm run build && cd ..
 cp .env.example .env
-# Add GNANI_API_KEY to .env for audio
+# Add GNANI_API_KEY to .env for audio — never commit .env
 .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000. The demo has turn based and live streaming comparisons, a case by case fixture evaluation, a ledger, and a session handoff desk. Run checks with `.venv/bin/pytest -q` and `cd web && npm run build`.
+Then open the app on port 8000. The demo includes turn-based and live streaming views, fixture evaluation, a ledger, and a handoff desk.
 
-## Deploy
+## Tests
 
-The `Dockerfile` builds the React app and installs ffmpeg. `render.yaml` defines a free Render web service with `GNANI_API_KEY` entered during setup. Sessions remain in memory. The demo uses a temporary SQLite database for Ledger, payment, and handoff records, so these also reset on restart unless a persistent database path is configured by the host.
-## Reliability v2
+```sh
+.venv/bin/pytest -q
+```
 
-The synthetic demo now freezes each proposed amount, date, and payment mode before a full read-back and clear confirmation. A guarded SQLite Ledger allows one open promise per synthetic account across sessions; the naive comparison only shows what it *would* have written. Each saved promise links to transcript evidence with character offsets, and the audit compares heard, proposed, and saved values. `/api/eval/adversarial` replays eight isolated synthetic conversations; `/api/eval` remains a legacy parser fixture demonstration. Live Prisma/Timbre behavior is a separate optional smoke check, and the in-memory session and audit desk reset on restart.
+63 pytest tests. Evaluation: 13/13, 4/4, 2/2, and 4/4 across the adversarial conversation suites.
 
-## Handoff desk
+## Project structure
 
-Hardship, dispute, wrong-person, and other handoffs become SQLite cases with the triggering line and timestamped conversation transcript. The desk can take over and resolve a case; takeover stops bot replies and blocks guarded bot promise writes for that session. `GET /api/handoffs` supports status and reason filters. The demo uses a synthetic borrower only.
+```
+wadapakka/     Python SDK (Layer, LenderConfig, stores, adapters)
+app.py         FastAPI demo server
+web/           React demo UI
+docs/          SDK docs and product screenshots
+examples/      Offline quickstart, Pipecat, LiveKit, telephony
+tests/         pytest
+demo/          Walkthrough and trailer videos
+```
 
-## Memory between calls
+## References
 
-A follow-up session reads the last saved promise and speaks its real amount and date through Timbre in the live path. The Ledger keeps promise history: a synthetic covering payment can mark a promise `kept`, a freshly read back and confirmed replacement marks it `changed`, and an overdue unpaid promise becomes `broken`. `POST /api/payments` records synthetic payments; due-date evaluation uses an injectable clock in tests. The UI shows the timeline and starts a follow-up call. A disputed memory goes to the handoff desk with the saved promise attached. See [v3 Eval results](docs/eval_v3_results.md).
+Gnani Prisma STT, Gnani Timbre TTS, Pipecat, LiveKit, and Remotion.
+
+## Contributing
+
+See `CONTRIBUTING.md` for setup, tests, and the project rules.
+
+## License
+
+MIT, as declared in `pyproject.toml`.
