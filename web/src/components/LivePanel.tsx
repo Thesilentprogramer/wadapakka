@@ -5,6 +5,7 @@ import { Meter } from './ui/Meter';
 import { useLiveCall, type PipelineKind, type PipelineResult } from '../hooks/useLiveCall';
 import type { AdversarialEvalResponse, AuditRecord, LedgerRow, PromiseProposal, UnconfirmedProposal } from '../hooks/useTurnCall';
 import { AdversarialEvaluation } from './TurnPanel';
+import { latestAuditsBySession, transcriptText } from '../utils/display';
 
 type LivePanelProps = {
   active?: boolean;
@@ -15,7 +16,7 @@ type LiveHandoff = {
   session_id: string;
   reason: string;
   brief: string;
-  transcript?: string;
+  transcript?: string | Array<{ speaker?: string; text?: string; timestamp?: string }>;
   logged_at?: string;
   audit?: AuditRecord;
   audit_status?: string;
@@ -101,7 +102,7 @@ function ComparisonCard({ kind, result }: { kind: PipelineKind; result?: Pipelin
         </div>
         <span className="pill !px-2 !py-1 !text-[9px]">{status}</span>
       </div>
-      <p className="mt-3 min-h-10 break-words text-sm leading-relaxed text-[var(--muted)]">{result?.transcript || 'Start a live call to see the transcript.'}</p>
+      <p className="mt-3 min-h-10 break-words text-sm leading-relaxed text-[var(--muted)]">{transcriptText(result?.transcript) || 'Start a live call to see the transcript.'}</p>
       <div className="mt-2 grid grid-cols-3 gap-2">
         {slots.map(({ key, label }) => (
           <div key={key} className="min-w-0 rounded-lg bg-[#eef4fd] p-2">
@@ -213,8 +214,9 @@ export default function LivePanel({ active = true, onPipelineUpdate }: LivePanel
   const buttonIcon = call.callState === 'Agent speaking' ? <Volume2 size={17} /> : call.isRunning ? <CircleStopIcon /> : <Mic2 size={17} />;
   const layerResult = call.results.layer;
   const layerSessionId = layerResult?.session?.id || '';
-  const currentAudit: AuditRecord | null = sessionAudit
-    || audits.find((item) => item.session_id === layerSessionId)
+  const allAudits = latestAuditsBySession([...(sessionAudit ? [sessionAudit] : []), ...audits]);
+  const currentAudit: AuditRecord | null = allAudits.find((item) => item.session_id === layerSessionId)
+    || sessionAudit
     || (layerResult?.audit && typeof layerResult.audit === 'object' ? layerResult.audit as AuditRecord : null);
   const queuedProposals: Array<{ sessionId: string; proposal: PromiseProposal; status: string; audit?: AuditRecord }> = [];
   const addQueuedProposal = (sessionId: string, proposal?: PromiseProposal | null, status = 'UNCONFIRMED', audit?: AuditRecord) => {
@@ -223,18 +225,20 @@ export default function LivePanel({ active = true, onPipelineUpdate }: LivePanel
     const committed = ledgerRows.some((row) => (id && row.proposal_id === id)
       || (row.session_id === sessionId && proposal.pay_date === row.pay_date && String(row.mode || '').toLowerCase() === String(proposal.mode || '').toLowerCase()
         && Number(row.amount_inr ?? (row.amount_paise === undefined ? NaN : row.amount_paise / 100)) === Number(proposal.amount_inr ?? (proposal.amount_paise === undefined ? NaN : proposal.amount_paise / 100))));
-    if (committed || queuedProposals.some((item) => item.sessionId === sessionId && proposalId(item.proposal) === id)) return;
+    const sessionWritten = ledgerRows.some((row) => row.session_id === sessionId) && !/review|discrep/i.test(String(status || ''));
+    if (committed || sessionWritten || /^(written|duplicate)$/i.test(String(status || '')) || queuedProposals.some((item) => item.sessionId === sessionId && proposalId(item.proposal) === id)) return;
     queuedProposals.push({ sessionId, proposal, status, audit });
   };
   if (layerSessionId) addQueuedProposal(layerSessionId, proposalOf(layerResult), layerResult?.commit_status || layerResult?.session?.state, currentAudit || undefined);
   for (const item of unconfirmedProposals) addQueuedProposal(item.session_id, item.proposal, item.audit_status || 'UNCONFIRMED', audits.find((audit) => audit.session_id === item.session_id) || (item.session_id === layerSessionId ? currentAudit || undefined : undefined));
-  for (const audit of [...audits, ...(sessionAudit ? [sessionAudit] : [])]) {
+  for (const audit of allAudits) {
     const candidate = audit.proposal_snapshot || (audit.proposal && typeof audit.proposal === 'object' ? audit.proposal as PromiseProposal : null);
     if (audit.session_id) addQueuedProposal(audit.session_id, candidate, audit.audit_status || audit.status || 'UNCONFIRMED', audit);
   }
-  const reviewAudits = [...audits, ...(sessionAudit ? [sessionAudit] : [])].filter((audit, index, all) => {
+  const reviewAudits = allAudits.filter((audit, index, all) => {
     const status = auditStatus(audit).toLowerCase();
-    return (status.includes('review') || status.includes('discrep') || status.includes('unconfirmed'))
+    const written = !!audit.session_id && ledgerRows.some((row) => row.session_id === audit.session_id);
+    return (status.includes('review') || status.includes('discrep') || (status.includes('unconfirmed') && !written))
       && all.findIndex((item) => (item.audit_id && item.audit_id === audit.audit_id) || (!item.audit_id && item.session_id === audit.session_id)) === index;
   });
 
@@ -434,9 +438,9 @@ export default function LivePanel({ active = true, onPipelineUpdate }: LivePanel
         </div>
         {handoffError && <p role="alert" className="mt-3 text-xs text-[var(--red)]">Handoffs unavailable: {handoffError}</p>}
         {auditError && <p role="status" className="mt-2 text-xs text-[var(--red)]">{auditError}</p>}
-        {call.handoffBrief && <article className="mt-4 rounded-xl bg-[#fff7e9] p-4"><div className="flex flex-wrap items-center gap-2"><UserRound size={15} className="text-[var(--amber)]" aria-hidden="true" /><strong className="text-sm capitalize">{String(layerResult?.event?.handoff_reason || layerResult?.event?.reason || 'Human handoff').replaceAll('_', ' ')}</strong><span className="rounded-full bg-[#e7f6ed] px-2 py-1 text-[9px] font-bold uppercase text-[var(--green)]">{layerSessionId && !ledgerRows.some((row) => row.session_id === layerSessionId) ? '0 Ledger writes' : 'Review required'}</span></div><p className="mb-0 mt-2 text-sm leading-relaxed">{call.handoffBrief}</p>{layerResult?.transcript && <p className="mb-0 mt-2 text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Last relevant transcript:</strong> “{layerResult.transcript}”</p>}{currentAudit && <p className="mb-0 mt-2 break-words text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Audit discrepancy:</strong> {auditDiscrepancy(currentAudit)}</p>}{layerSessionId && <a href={`/api/session/${encodeURIComponent(layerSessionId)}/audit`} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[var(--primary)]">Open session audit <ExternalLink size={12} /></a>}</article>}
+        {call.handoffBrief && <article className="mt-4 rounded-xl bg-[#fff7e9] p-4"><div className="flex flex-wrap items-center gap-2"><UserRound size={15} className="text-[var(--amber)]" aria-hidden="true" /><strong className="text-sm capitalize">{String(layerResult?.event?.handoff_reason || layerResult?.event?.reason || 'Human handoff').replaceAll('_', ' ')}</strong><span className="rounded-full bg-[#e7f6ed] px-2 py-1 text-[9px] font-bold uppercase text-[var(--green)]">{layerSessionId && !ledgerRows.some((row) => row.session_id === layerSessionId) ? '0 Ledger writes' : 'Review required'}</span></div><p className="mb-0 mt-2 text-sm leading-relaxed">{call.handoffBrief}</p>{transcriptText(layerResult?.transcript) && <p className="mb-0 mt-2 text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Last relevant transcript:</strong> “{transcriptText(layerResult?.transcript)}”</p>}{currentAudit && <p className="mb-0 mt-2 break-words text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Audit discrepancy:</strong> {auditDiscrepancy(currentAudit)}</p>}{layerSessionId && <a href={`/api/session/${encodeURIComponent(layerSessionId)}/audit`} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[var(--primary)]">Open session audit <ExternalLink size={12} /></a>}</article>}
         {!call.handoffBrief && handoffs.length === 0 && <p className="mt-3 text-sm text-[var(--muted)]">No handoff cases are reported.</p>}
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">{handoffs.map((row, index) => { const safety = ['hardship', 'wrong_person', 'dispute'].some((reason) => row.reason.toLowerCase().includes(reason)); const hasWrite = ledgerRows.some((item) => item.session_id === row.session_id); const audit = row.audit || audits.find((item) => item.session_id === row.session_id) || (row.session_id === layerSessionId ? currentAudit : null); return <article key={`${row.session_id}-${row.logged_at || index}`} className="rounded-xl bg-[#f7f9fd] p-3"><div className="flex flex-wrap items-center gap-2"><span className="inline-flex items-center gap-1 text-xs font-semibold capitalize text-[var(--amber)]"><UserRound size={13} />{row.reason.replaceAll('_', ' ')}</span>{safety && !hasWrite && <span className="rounded-full bg-[#e7f6ed] px-2 py-1 text-[9px] font-bold uppercase text-[var(--green)]">0 Ledger writes</span>}</div><p className="mb-0 mt-2 text-xs leading-relaxed">{row.brief}</p>{row.transcript && <p className="mb-0 mt-2 text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Last relevant transcript:</strong> “{row.transcript}”</p>}{row.unresolved_slot_candidates && <p className="mb-0 mt-2 break-words text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Unresolved slots:</strong> {JSON.stringify(row.unresolved_slot_candidates)}</p>}<p className="mb-0 mt-2 text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Read-back:</strong> {row.readback_status || 'not supplied'}{audit && <> · <strong className="text-[var(--ink)]">{auditStatus(audit)}:</strong> {auditDiscrepancy(audit)}</>}</p><a href={`/api/session/${encodeURIComponent(row.session_id)}/audit`} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[var(--primary)]">Open audit <ExternalLink size={12} /></a></article>; })}</div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">{handoffs.map((row, index) => { const safety = ['hardship', 'wrong_person', 'dispute'].some((reason) => String(row.reason || '').toLowerCase().includes(reason)); const hasWrite = ledgerRows.some((item) => item.session_id === row.session_id); const audit = row.audit || audits.find((item) => item.session_id === row.session_id) || (row.session_id === layerSessionId ? currentAudit : null); return <article key={`${row.session_id}-${row.logged_at || index}`} className="rounded-xl bg-[#f7f9fd] p-3"><div className="flex flex-wrap items-center gap-2"><span className="inline-flex items-center gap-1 text-xs font-semibold capitalize text-[var(--amber)]"><UserRound size={13} />{String(row.reason || 'handoff').replaceAll('_', ' ')}</span>{safety && !hasWrite && <span className="rounded-full bg-[#e7f6ed] px-2 py-1 text-[9px] font-bold uppercase text-[var(--green)]">0 Ledger writes</span>}</div><p className="mb-0 mt-2 text-xs leading-relaxed">{row.brief}</p>{transcriptText(row.transcript) && <p className="mb-0 mt-2 text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Last relevant transcript:</strong> “{transcriptText(row.transcript)}”</p>}{Array.isArray(row.transcript) && row.transcript.length > 0 && <details className="mt-2 text-xs"><summary className="cursor-pointer font-semibold text-[var(--ink)]">Full transcript · {row.transcript.length} turns</summary><ol className="mt-1 space-y-1 pl-4">{row.transcript.map((turn, turnIndex) => <li key={turnIndex}><strong className="capitalize">{String(turn?.speaker || '')}</strong>: {String(turn?.text || '')}</li>)}</ol></details>}{row.unresolved_slot_candidates && <p className="mb-0 mt-2 break-words text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Unresolved slots:</strong> {JSON.stringify(row.unresolved_slot_candidates)}</p>}<p className="mb-0 mt-2 text-xs text-[var(--muted)]"><strong className="text-[var(--ink)]">Read-back:</strong> {row.readback_status || 'not supplied'}{audit && <> · <strong className="text-[var(--ink)]">{auditStatus(audit)}:</strong> {auditDiscrepancy(audit)}</>}</p><a href={`/api/session/${encodeURIComponent(row.session_id)}/audit`} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[var(--primary)]">Open audit <ExternalLink size={12} /></a></article>; })}</div>
         {!!reviewAudits.length && <div className="mt-4 border-t border-[color:var(--line)] pt-4"><div className="flex items-center gap-2"><AlertCircle size={15} className="text-[var(--amber)]" /><h3 className="text-sm font-semibold">Said vs saved discrepancies</h3></div>{reviewAudits.map((audit, index) => <article key={audit.audit_id || audit.session_id || index} className="mt-2 rounded-xl bg-[#fff4e1] p-3"><div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-xs">{audit.session_id ? `Session ${audit.session_id.slice(0, 8)}` : audit.audit_id || 'Audit review'}</strong><span className="text-[9px] font-bold uppercase text-[var(--amber)]">{auditStatus(audit)}</span></div><p className="mb-0 mt-2 break-words text-xs leading-relaxed">{auditDiscrepancy(audit)}</p>{audit.session_id && <a href={`/api/session/${encodeURIComponent(audit.session_id)}/audit`} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[var(--primary)]">Open audit <ExternalLink size={12} /></a>}</article>)}</div>}
       </section>
 

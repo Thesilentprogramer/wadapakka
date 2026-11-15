@@ -40,6 +40,7 @@ import {
   type TurnResponse,
   type UnconfirmedProposal,
 } from '../hooks/useTurnCall';
+import { latestAuditsBySession, snippetsText, transcriptText } from '../utils/display';
 
 const SLOT_FIELDS: Array<{ key: keyof Slots; label: string }> = [
   { key: 'amount_inr', label: 'Amount' },
@@ -480,7 +481,7 @@ function TurnTimeline({ results }: { results: Partial<Record<Pipeline, TurnRespo
             <div className="min-w-0">
               <strong className="block text-sm font-semibold text-[var(--ink)]">{pipeline === 'naive' ? 'Naive' : 'Layer'} · {readable(event.decision)}</strong>
               <span className="mt-1 block break-words text-xs leading-relaxed text-[var(--muted)]">
-                “{event.transcript}”{values ? ` · ${values}` : ''} · {event.latency_ms} ms
+                “{transcriptText(event.transcript)}”{values ? ` · ${values}` : ''} · {event.latency_ms} ms
               </span>
             </div>
           </li>
@@ -550,7 +551,8 @@ function ProposalQueue({ results, audits, sessionAudits, ledger, unconfirmed }: 
       || (row.session_id === sessionId && proposal.amount_inr !== undefined
         && Number(row.amount_inr ?? (row.amount_paise === undefined ? NaN : row.amount_paise / 100)) === Number(proposal.amount_inr ?? (proposal.amount_paise === undefined ? NaN : proposal.amount_paise / 100))
         && row.pay_date === proposal.pay_date && String(row.mode || '').toLowerCase() === String(proposal.mode || '').toLowerCase()));
-    if (alreadyCommitted) return;
+    const sessionWritten = ledger.some((row) => row.session_id === sessionId) && !/review|discrep/i.test(String(status || ''));
+    if (alreadyCommitted || sessionWritten || /^(written|duplicate)$/i.test(String(status || ''))) return;
     const key = `${sessionId}:${id || proposal.version || 'proposal'}`;
     if (candidates.some((item) => `${item.sessionId}:${proposalId(item.proposal) || item.proposal.version || 'proposal'}` === key)) return;
     candidates.push({ sessionId, proposal, status: status || proposal.status || 'UNCONFIRMED', audit });
@@ -559,7 +561,7 @@ function ProposalQueue({ results, audits, sessionAudits, ledger, unconfirmed }: 
   const layer = results.layer;
   if (layer) add(layer.session.id, proposalOf(layer), layer.commit_status || layer.session.state, layer.audit || sessionAudits[layer.session.id]);
   for (const item of unconfirmed) add(item.session_id, item.proposal, item.audit_status || 'UNCONFIRMED', sessionAudits[item.session_id] || audits.find((audit) => audit.session_id === item.session_id));
-  for (const audit of [...audits, ...Object.values(sessionAudits)]) {
+  for (const audit of latestAuditsBySession([...Object.values(sessionAudits), ...audits])) {
     const snapshot = audit.proposal_snapshot || (audit.proposal && typeof audit.proposal === 'object' ? audit.proposal as PromiseProposal : null);
     if (audit.session_id) add(audit.session_id, snapshot, audit.audit_status || audit.status || 'UNCONFIRMED', audit);
   }
@@ -728,11 +730,12 @@ function HandoffDesk({ handoffs, handoffError, audits, sessionAudits, auditError
       setActionCase(null);
     }
   }
-  const auditRows = [...audits, ...Object.values(sessionAudits)];
-  const latestAudit = (sessionId: string) => sessionAudits[sessionId] || auditRows.find((audit) => audit.session_id === sessionId);
+  const auditRows = latestAuditsBySession([...Object.values(sessionAudits), ...audits]);
+  const latestAudit = (sessionId: string) => auditRows.find((audit) => audit.session_id === sessionId) || sessionAudits[sessionId];
   const needsReview = auditRows.filter((audit, index, all) => {
     const status = auditStatusOf(audit).toLowerCase();
-    return (status.includes('review') || status.includes('discrep') || status.includes('unconfirmed'))
+    const written = !!audit.session_id && ledger.some((row) => row.session_id === audit.session_id);
+    return (status.includes('review') || status.includes('discrep') || (status.includes('unconfirmed') && !written))
       && all.findIndex((item) => (item.audit_id && item.audit_id === audit.audit_id) || (!item.audit_id && item.session_id === audit.session_id)) === index;
   });
 
@@ -752,7 +755,7 @@ function HandoffDesk({ handoffs, handoffError, audits, sessionAudits, auditError
       <div className="space-y-3">
         {handoffs.filter(row => !row.legacy).slice().reverse().map((row) => {
           const audit = row.audit || latestAudit(row.session_id);
-          const transcript = typeof row.transcript === 'string' ? row.transcript : row.transcript_snippets?.join(' · ') || (Array.isArray(audit?.transcript_snippets) ? audit?.transcript_snippets.join(' · ') : '');
+          const transcript = transcriptText(row.transcript) || snippetsText(row.transcript_snippets) || snippetsText(audit?.transcript_snippets);
           const candidates = row.unresolved_slot_candidates || audit?.parsed_candidates;
           const safetyCase = ['hardship', 'wrong_person', 'dispute'].some((reason) => row.reason.toLowerCase().includes(reason));
           const hasRows = ledger.some((item) => item.session_id === row.session_id);

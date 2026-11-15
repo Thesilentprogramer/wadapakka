@@ -64,6 +64,20 @@ WEEKDAYS = {
 }
 
 
+MONTHS = (
+    "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|"
+    "september|sept|sep|october|oct|november|nov|december|dec|"
+    "जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|सितम्बर|अक्टूबर|नवंबर|नवम्बर|दिसंबर|दिसम्बर"
+)
+_DAY = r"(?:\d{1,2}|pandrah|solah|bees|पंद्रह|सोलह|बीस)"
+_MONTH_DATE_RE = re.compile(
+    rf"(?<![\w\u0900-\u097F]){_DAY}\s*(?:st|nd|rd|th)?\s+(?:{MONTHS})(?:\s+20\d{{2}})?(?![\w\u0900-\u097F])|"
+    rf"(?<![\w\u0900-\u097F])(?:{MONTHS})\s+{_DAY}(?:st|nd|rd|th)?(?:\s+20\d{{2}})?(?![\w\u0900-\u097F])",
+    re.IGNORECASE,
+)
+NEGATIONS = {"nahi", "nahin", "nahiin", "nhi", "not", "mat", "नहीं", "नही"}
+
+
 def _fold(text: str) -> str:
     text = text.lower().replace("hazār", "hazaar").replace("हज़ार", "हजार")
     text = re.sub(r"(?<!\d),(?!\d)|₹", " ", text)
@@ -82,22 +96,36 @@ def parse_amount_inr(text: str) -> tuple[float | None, str]:
     raw = re.sub(r"\b\d{4}-\d{1,2}-\d{1,2}\b", " ", raw)
     raw = re.sub(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", " ", raw)
     raw = re.sub(r"\b\d{10}\b", " ", raw)
+    # "20 November" / "November 20" is a date, never part of the amount
+    # ("paanch hazaar, 20 November" must stay 5,000, not 5,020).
+    raw = _MONTH_DATE_RE.sub(" | ", raw)
     # Find a contiguous number phrase. Unrelated dates, phone numbers and words
     # elsewhere in the turn must not be added to the promised amount.
-    words = re.findall(r"[a-zA-Z\u0900-\u097F]+|\d[\d,]*(?:\.\d+)?", raw)
+    words = re.findall(r"[a-zA-Z\u0900-\u097F]+|\d[\d,]*(?:\.\d+)?|\|", raw)
     number_words = {**ONES, **FRACTIONS, **SCALES, "and": 0, "aur": 0}
-    candidates = []
+    candidates = []  # (phrase, index of the token after the phrase)
     run = []
-    for word in words + ["END"]:
+    for index, word in enumerate(words + ["END"]):
         if word in number_words or re.fullmatch(r"\d[\d,]*(?:\.\d+)?", word):
             run.append(word)
         elif run:
-            candidates.append(run)
+            candidates.append((run, index))
             run = []
     if not candidates:
         return None, "no_amount_found"
+    # "Teen hazaar nahi ho payega, paanch hazaar ..." -> the negated amount is
+    # withdrawn and the corrected one after it is the offer.
+    def _negated(end: int) -> bool:
+        return any(w in NEGATIONS for w in words[end:end + 3])
+    live = [c for c, end in candidates if not _negated(end)]
+    if live and len(live) < len(candidates):
+        last_negated = max(i for i, (c, end) in enumerate(candidates) if _negated(end))
+        after = [c for c, _ in candidates[last_negated + 1:]]
+        pool = after or live
+    else:
+        pool = [c for c, _ in candidates]
     # Prefer a scaled phrase; otherwise the first plausible numeric span.
-    phrase = next((c for c in candidates if any(w in SCALES for w in c)), candidates[0])
+    phrase = next((c for c in pool if any(w in SCALES for w in c)), pool[0])
     if any(w in FRACTIONS for w in phrase):
         frac = next(FRACTIONS[w] for w in phrase if w in FRACTIONS)
         scale = next((SCALES[w] for w in phrase if w in SCALES), 1)

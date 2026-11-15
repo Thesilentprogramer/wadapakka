@@ -477,14 +477,12 @@ def _layer_turn(
             new_slots[name] = None
         elif new_slots[name] is None and old.get(name) is not None:
             new_slots[name] = old[name]
-        elif name == "amount_inr" and new_slots[name] is not None and old.get(name) and \
-                not any(w in text.lower() for w in ("rupee", "rupay", "₹", "amount", "sirf", "only")) and \
-                ("november" in text.lower() or "नवंबर" in text or "नवम्बर" in text):
-            new_slots[name] = old[name]
     missing = [name for name in ("amount_inr", "pay_date", "mode") if new_slots.get(name) is None]
     amount_text = re.sub(r"\b(?:20\d{2}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b", " ", text)
     amount_text = re.sub(r"\b(?:\d{1,2}|pandrah|solah|पंद्रह|सोलह)\s+(?:november|nov|नवंबर|नवम्बर)(?:\s+20\d{2})?\b", " ", amount_text, flags=re.I)
-    amounts_in_text = {round(float(value.replace(",", "")) * 100) for value in re.findall(r"(?<!\w)(\d[\d,]*(?:\.\d{1,2})?)(?!\w)", amount_text)}
+    # A withdrawn amount ("3000 nahi, 5000") is not a competing candidate.
+    negated_free_text = re.sub(r"(?<!\w)\d[\d,]*(?:\.\d{1,2})?(?:\s+\w+){0,2}?\s+(?:nahi|nahin|nhi|not)\b", " ", amount_text, flags=re.I)
+    amounts_in_text = {round(float(value.replace(",", "")) * 100) for value in re.findall(r"(?<!\w)(\d[\d,]*(?:\.\d{1,2})?)(?!\w)", negated_free_text)}
     alternatives = re.split(r"\b(?:or|ya|aur)\b|या|और|अथवा", amount_text, flags=re.I)
     alternative_amounts = {round(value * 100) for part in alternatives
                            for value in [extract_slots(part, today=session["today"]).amount_inr]
